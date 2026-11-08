@@ -8,9 +8,8 @@ import {
   itchBand,
   skinConditionInfo,
   sleepBand,
-  symptomBand,
-  SYMPTOMS,
 } from '../folders/theme';
+import { groupLevel, levelInfo, SYMPTOM_GROUPS } from '../symptoms/groups';
 import { getMemo } from './memoStore';
 
 /**
@@ -31,7 +30,7 @@ export type ExportField = 'photo' | 'skin' | 'symptoms' | 'itch' | 'sleep' | 'me
 export const EXPORT_FIELDS: { key: ExportField; label: string; caption: string }[] = [
   { key: 'photo', label: '이미지', caption: '그날 촬영한 사진' },
   { key: 'skin', label: '피부 종합 상태', caption: '0~100 표시값과 단계' },
-  { key: 'symptoms', label: '4가지 증상', caption: '붉기 · 오돌토돌함 · 긁은 상처 · 두꺼워짐' },
+  { key: 'symptoms', label: '증상 요약', caption: '염증 반응 · 긁은 흔적 · 만성 흔적' },
   { key: 'itch', label: '가려움 안정도', caption: '가려움 문진(VAS)' },
   { key: 'sleep', label: '수면 점수', caption: '스마트워치 연동 값' },
   { key: 'memo', label: '메모', caption: '기록에 직접 남긴 글' },
@@ -44,7 +43,6 @@ export interface ExportRecord {
   record: any;
 }
 
-const SYMPTOM_ORDER = ['redness', 'bumps', 'scratch', 'thickening'] as const;
 
 const fmtDate = (dateKey: string) => {
   const [y, m, d] = dateKey.split('-').map(Number);
@@ -115,10 +113,9 @@ function recordSection(
     rows.push(metricRow('피부 종합 상태', `${Math.round(v)}`, skinConditionInfo(v).ko));
   }
   if (fields.has('symptoms')) {
-    // 세부 증상은 점수를 적지 않고 이름만 적는다(뚜렷함/두드러짐/미미함/없음)
-    SYMPTOM_ORDER.forEach((key) => {
-      const v = DISPLAY_SCALE.symptom(r[key]);
-      rows.push(metricRow(SYMPTOMS[key].label, symptomBand(v).ko));
+    // 증상 묶음은 점수를 적지 않고 단계 이름만 적는다(뚜렷함/두드러짐/미미함/없음)
+    SYMPTOM_GROUPS.forEach((group) => {
+      rows.push(metricRow(group.label, levelInfo(groupLevel(r, group)).ko));
     });
   }
   if (fields.has('itch')) {

@@ -27,6 +27,12 @@ export interface ExamCapture {
   itchVas: number | null;
   /** 이어서 기록하기일 때, 이어붙일 경과 관찰 폴더 */
   folderId?: string;
+  /**
+   * 신규 증상 기록에서 첫 촬영 뒤 **고스트를 보며 같은 자리를 다시 찍은 사진들**(4장).
+   * 기록으로 남지 않는다 — 같은 조건에서 잰 면적이 얼마나 흔들리는지(SW)를 구해 그 부위의 측정
+   * 오차(SDC)를 정하는 데만 쓴다.
+   */
+  repeats?: { photoUri: string; session: MonitorSession }[];
 }
 
 /** 결과 화면이 보여주는 온디바이스 분석 묶음 */

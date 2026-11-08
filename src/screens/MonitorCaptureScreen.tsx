@@ -365,6 +365,7 @@ export default function MonitorCaptureScreen({
    * 옅게 깔고 끌 수 있게 두면 그 문제는 사용자가 그 자리에서 해결할 수 있다.
    */
   const [ghostOn, setGhostOn] = useState(true);
+  const [plainGhostOn, setPlainGhostOn] = useState(true);
 
   /**
    * 판정 결과 안내는 화면 대신 소리로 나간다. 매 틱마다 부르지만 같은 말을 반복하지 않도록
@@ -403,6 +404,12 @@ export default function MonitorCaptureScreen({
    */
   const scaleKind: ScaleKind | null =
     DUMP_RESULTS || scaleBroken || !measureArea ? null : scaleKindOf(target.part);
+  /*
+    자(얼굴·몸통)가 없는 부위(팔·다리 등)의 고스트 — 구도를 잴 방법이 없어 **눈으로 맞추는 용도뿐**이다.
+    위 ghost와 달리 정렬 게이트의 목표가 되지 않는다(맞출 기준이 없는데 판정만 바꾸면 안 된다).
+    그래서 자가 있는 부위는 ghost가, 없는 부위는 이 값이 맡는다 — 둘이 동시에 켜지는 일은 없다.
+  */
+  const plainGhostUri = !scaleKind && ghostUri ? ghostUri : null;
   /** 마지막 판정 프레임의 크기 — 화면 가이드를 프레임 좌표와 맞추는 데 쓴다 */
   const [frameSize, setFrameSize] = useState({ w: 0, h: 0 });
 
@@ -971,6 +978,18 @@ export default function MonitorCaptureScreen({
           가이드 도형은 고스트가 없을 때만 그린다. 둘을 함께 두면 맞출 목표가 둘이 되는데,
           정작 판정이 겨냥하는 것은 하나뿐이라 사용자는 반드시 틀린 쪽을 맞추게 된다.
         */}
+        {plainGhostUri && plainGhostOn && (
+          <Image
+            source={{ uri: plainGhostUri }}
+            style={[
+              StyleSheet.absoluteFill,
+              styles.ghost,
+              facing === 'front' && { transform: [{ scaleX: -1 }] },
+            ]}
+            resizeMode="cover"
+          />
+        )}
+
         {scaleKind && !(ghost && ghostOn) && (
           <ScaleGuideOverlay
             kind={scaleKind}
@@ -995,6 +1014,8 @@ export default function MonitorCaptureScreen({
             ? `${scaleKind === 'face' ? '얼굴' : '양 어깨'}가 더 담겨야 넓이까지 기록돼요 — 조금 더 멀리서 잡거나, 아래 버튼을 눌러 그냥 찍어도 돼요`
             : ghost && ghostOn
               ? '지난 사진에 겹쳐 맞추면 넓이 변화를 정확히 볼 수 있어요'
+              : plainGhostUri && plainGhostOn
+                ? '지난 사진에 겹쳐 같은 자리를 맞춰 찍어보세요'
               : scaleKind === 'face'
                 ? '가이드에 얼굴을 맞추면 병변 넓이 변화까지 함께 볼 수 있어요'
                 : scaleKind === 'torso'
@@ -1024,6 +1045,15 @@ export default function MonitorCaptureScreen({
           >
             <MaterialIcons name={ghostOn ? 'layers' : 'layers-clear'} size={16} color="#FFFFFF" />
             <Text style={styles.soundBtnText}>겹쳐 보기 {ghostOn ? 'ON' : 'OFF'}</Text>
+          </Pressable>
+        )}
+        {plainGhostUri && (
+          <Pressable
+            style={[styles.ghostBtn, plainGhostOn && styles.soundBtnOn]}
+            onPress={() => setPlainGhostOn((v) => !v)}
+          >
+            <MaterialIcons name={plainGhostOn ? 'layers' : 'layers-clear'} size={16} color="#FFFFFF" />
+            <Text style={styles.soundBtnText}>겹쳐 보기 {plainGhostOn ? 'ON' : 'OFF'}</Text>
           </Pressable>
         )}
 

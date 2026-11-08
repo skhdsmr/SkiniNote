@@ -85,14 +85,36 @@ export const SIGMA_BY_KIND: Record<ScaleKind, number> = {
   face: REPEATABILITY_SIGMA,
   torso: 0.22,
 };
-/** 이 배수를 넘어야 변화로 인정한다 (2σ ≈ 95% 신뢰) */
-export const LOD_K = 2;
-/** 변화로 인정하는 최소 폭 (얼굴 ±30%) — 이 안의 오르내림은 측정 오차와 구분되지 않는다 */
+/**
+ * 측정 오차를 넘는 최소 변화량(SDC) = 1.96 × √2 × SW.
+ *
+ * 같은 것을 두 번 재면 차이 = ε₁ − ε₂ 이고 그 표준편차가 √2·SW(SW = 개인 내 표준편차)이므로, 95% 신뢰로
+ * 오차를 넘으려면 그 1.96배여야 한다 (Bland & Altman, BMJ 1996;312:1654). 예전 값(2σ)은 √2를 빼먹어
+ * 문턱이 30% 낮았다 — 오차를 변화로 읽는 쪽으로 틀리는 방향이라 바로잡았다.
+ */
+export const LOD_K = 1.96 * Math.SQRT2;
+
+/**
+ * 등록 때 같은 부위를 여러 번(예: 5회) 찍어 잰 면적 지수들 → 그 부위의 측정 오차.
+ *
+ * 면적은 촬영 거리에 따라 절대값이 달라지므로 **상대값**(변동계수 = 표본 표준편차 ÷ 평균)으로 SW를 낸다.
+ * 표본이 둘 미만이거나 평균이 0이면 null — 그때는 아래 잠정값(SIGMA_BY_KIND)을 쓴다.
+ */
+export function sdcFromRepeats(indices: readonly number[]): { sw: number; sdc: number } | null {
+  const v = indices.filter((x) => Number.isFinite(x) && x > 0);
+  if (v.length < 2) return null;
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / (v.length - 1));
+  const sw = sd / mean;
+  return { sw, sdc: LOD_K * sw };
+}
+/** 변화로 인정하는 최소 폭 (얼굴 ±42%, 잠정 σ 기준) — 이 안의 오르내림은 측정 오차와 구분되지 않는다 */
 export const LOD = REPEATABILITY_SIGMA * LOD_K;
 
+
 /** 그 부위에서 변화로 인정하는 최소 폭 */
-export function lodOf(kind: ScaleKind): number {
-  return SIGMA_BY_KIND[kind] * LOD_K;
+export function lodOf(kind: ScaleKind, measuredSw?: number | null): number {
+  return (measuredSw ?? SIGMA_BY_KIND[kind]) * LOD_K;
 }
 
 /**
@@ -162,7 +184,7 @@ export function timeAxisOf<R extends AreaRecord>(points: readonly AreaPoint<R>[]
 }
 
 /** 넓이를 잰 회차만 골라 첫 회차 대비 변화율로 바꾼다. 잰 회차가 하나도 없으면 null */
-export function areaTrendOf<R extends AreaRecord>(records: readonly R[]): AreaTrend<R> | null {
+export function areaTrendOf<R extends AreaRecord>(records: readonly R[], measuredSw?: number | null): AreaTrend<R> | null {
   const measured = records.filter((r) => r.lesionAreaFaceIndex != null && r.lesionAreaFaceIndex > 0);
   if (measured.length === 0) return null;
 
@@ -182,7 +204,7 @@ export function areaTrendOf<R extends AreaRecord>(records: readonly R[]): AreaTr
   return {
     base,
     kind,
-    lod: lodOf(kind),
+    lod: lodOf(kind, measuredSw),
     points,
     latest: points[points.length - 1],
     skipped: records.length - measured.length,
@@ -204,8 +226,8 @@ export interface AreaVerdict {
  * 변화율 → 판정. 띠(LOD) 안이면 **방향을 말하지 않는다.**
  * 측정 오차와 구분되지 않는 움직임에 "좋아졌다"를 붙이면, 그건 없는 정보를 지어내는 것이다.
  */
-export function verdictOf(delta: number, kind: ScaleKind = 'face'): AreaVerdict {
-  if (Math.abs(delta) < lodOf(kind)) return { ko: '변화 없음', tone: 'same', color: mc.navInactive, lightBg: false };
+export function verdictOf(delta: number, kind: ScaleKind = 'face', sw?: number | null): AreaVerdict {
+  if (Math.abs(delta) < lodOf(kind, sw)) return { ko: '변화 없음', tone: 'same', color: mc.navInactive, lightBg: false };
   return delta < 0
     ? { ko: '좋아지는 중', tone: 'better', color: mc.sev1, lightBg: true }
     : { ko: '넓어지는 중', tone: 'worse', color: mc.sev3, lightBg: false };
@@ -232,7 +254,7 @@ export function fmtCoverage(pct: number): string {
  * 띠(lodOf) 안이면 방향을 말하지 않는 규칙은 verdictOf와 같다. 여기서 "처음보다 3% 감소"라고 써
  * 놓고 배지에는 "변화 없음"을 달면, 화면 한 줄 안에서 앱이 스스로 모순된 말을 하게 된다.
  */
-export function changePhrase(delta: number, kind: ScaleKind = 'face'): string {
-  if (Math.abs(delta) < lodOf(kind)) return '처음과 비슷해요';
+export function changePhrase(delta: number, kind: ScaleKind = 'face', sw?: number | null): string {
+  if (Math.abs(delta) < lodOf(kind, sw)) return '처음과 비슷해요';
   return `처음보다 ${Math.round(Math.abs(delta) * 100)}% ${delta < 0 ? '감소' : '증가'}`;
 }

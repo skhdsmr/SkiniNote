@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { AppColors } from '../theme';
 import { useMonitoring } from '../context/MonitoringContext';
 import { getFolder } from '../folders/store';
 import { BodyModelId } from '../three/humanModel';
-import { MonitorTarget } from '../monitoring/types';
+import { MonitorSession, MonitorTarget } from '../monitoring/types';
 import { ExamCapture, ExamKind } from '../exam/examTypes';
 import { todayKey } from '../folders/store';
 import { getDayItch } from '../records/itchStore';
@@ -10,7 +13,10 @@ import PartSelectScreen from './PartSelectScreen';
 import CaptureSourceScreen, { CaptureSource } from './CaptureSourceScreen';
 import MonitorCaptureScreen from './MonitorCaptureScreen';
 
-type Step = 'part' | 'source' | 'capture';
+type Step = 'part' | 'source' | 'capture' | 'repeatIntro' | 'repeat';
+
+/** 신규 증상 기록: 첫 촬영 1장 + 고스트를 보며 다시 찍는 4장 = 5장 */
+const REPEAT_TOTAL = 5;
 
 /**
  * "피부 바로 스캔"이 쓰는 임시 자리.
@@ -74,6 +80,8 @@ export default function ExamFlow({
   const [source, setSource] = useState<CaptureSource>('camera');
   const [target, setTarget] = useState<MonitorTarget | null>(presetTarget ?? (isQuick ? QUICK_TARGET : null));
   const { createTarget, findTarget } = useMonitoring();
+  /** 신규 기록의 촬영본 — [0]이 기록이 되는 첫 사진, 나머지가 측정 오차용 반복 촬영 */
+  const [shots, setShots] = useState<{ uri: string; session: MonitorSession }[]>([]);
 
   // 신규 증상 기록에서만 거치는 앞 단계 — 부위 선택 한 번
   if (isNew && (step === 'part' || !target)) {
@@ -125,11 +133,69 @@ export default function ExamFlow({
     신규 기록에는 깔지 않는다 — 맞출 지난 사진이 아직 없고, 그 촬영이 곧 기준이 된다.
     폴더 기록에 사진이 없으면(옛 기록 등) 대상의 기준 세션 사진으로 물러선다.
   */
+  /*
+    기록의 photo는 실제 촬영이면 { uri }, 데모(dump) 기록이면 번들 에셋(require 결과, 숫자)이다 —
+    에셋은 uri로 풀어 줘야 프리뷰에 깔 수 있다.
+  */
+  const firstPhoto: any = folderId ? getFolder(folderId)?.records[0]?.photo : undefined;
+  const firstPhotoUri: string | undefined =
+    typeof firstPhoto === 'number' ? Image.resolveAssetSource(firstPhoto)?.uri : firstPhoto?.uri;
   const ghostUri =
-    kind === 'followUp'
-      ? (folderId ? getFolder(folderId)?.records[0]?.photo?.uri : undefined) ??
-        current.baseline?.processedUri
-      : undefined;
+    kind === 'followUp' ? firstPhotoUri ?? current.baseline?.processedUri : undefined;
+
+  const itchVas = getDayItch(todayKey());
+
+  // ── 신규 증상 기록: 첫 촬영 뒤 안내 → 고스트를 보며 4번 더 ──────────────────────────
+  if (isNew && step === 'repeatIntro') {
+    return (
+      <View style={styles.intro}>
+        <View style={styles.introIcon}><MaterialIcons name="layers" size={30} color="#16320A" /></View>
+        <Text style={styles.introTitle}>같은 자리를 {REPEAT_TOTAL - 1}번 더 촬영할게요</Text>
+        <Text style={styles.introSub}>
+          첫 사진이 화면에 흐리게 겹쳐 보여요.{'\n'}그 위에 맞춰 같은 구도로 찍어 주세요.{'\n'}
+          이 사진들로 이 부위의 측정 오차를 정해서, 이후 변화가 진짜인지 판단해요.
+        </Text>
+        <Pressable style={styles.introBtn} onPress={() => setStep('repeat')}>
+          <Text style={styles.introBtnText}>촬영 시작</Text>
+        </Pressable>
+        <Pressable style={styles.introBack} onPress={() => { setShots([]); setStep('source'); }}>
+          <Text style={styles.introBackText}>처음부터 다시</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (isNew && step === 'repeat' && shots.length > 0) {
+    const n = shots.length + 1; // 지금 찍을 장 번호
+    return (
+      <View style={{ flex: 1 }}>
+        <MonitorCaptureScreen
+          key={`repeat-${n}`}
+          target={current}
+          measureArea
+          ghostUri={shots[0].uri}
+          source={source}
+          onCancel={() => { setShots([]); setStep('source'); }}
+          onComplete={(processedUri, session) => {
+            const next = [...shots, { uri: processedUri, session }];
+            if (next.length < REPEAT_TOTAL) { setShots(next); return; }
+            onCaptured({
+              kind,
+              target: current,
+              session: next[0].session,
+              photoUri: next[0].uri,
+              itchVas,
+              folderId,
+              repeats: next.slice(1).map((x) => ({ photoUri: x.uri, session: x.session })),
+            });
+          }}
+        />
+        <View style={styles.counter} pointerEvents="none">
+          <Text style={styles.counterText}>{n} / {REPEAT_TOTAL} 촬영 · 첫 사진에 맞춰 찍어 주세요</Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <MonitorCaptureScreen
@@ -142,21 +208,33 @@ export default function ExamFlow({
       ghostUri={ghostUri}
       source={source}
       onCancel={() => setStep('source')}
-      onComplete={(processedUri, session) =>
+      onComplete={(processedUri, session) => {
+        // 신규 기록은 첫 사진을 붙들고 반복 촬영으로 넘어간다 — 분석은 5장이 모인 뒤에 한 번만 돈다
+        if (isNew) {
+          setShots([{ uri: processedUri, session }]);
+          setStep('repeatIntro');
+          return;
+        }
         /*
           가려움은 이 촬영이 재는 값이 아니라 **그날 적어 둔 값**이라, 찍는 순간의 값을 그대로
           붙인다. 아직 안 적었으면 null이고, 나중에 기록 탭에서 적으면 그날 기록 전체에 소급
           적용된다(folders/store의 applyDayItch) — 그래서 여기서 못 읽어도 잃는 것이 없다.
         */
-        onCaptured({
-          kind,
-          target: current,
-          session,
-          photoUri: processedUri,
-          itchVas: getDayItch(todayKey()),
-          folderId,
-        })
-      }
+        onCaptured({ kind, target: current, session, photoUri: processedUri, itchVas, folderId });
+      }}
     />
   );
 }
+
+const styles = StyleSheet.create({
+  intro: { flex: 1, backgroundColor: '#14171C', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },
+  introIcon: { width: 64, height: 64, borderRadius: 32, backgroundColor: AppColors.greenTop, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  introTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', textAlign: 'center' },
+  introSub: { color: 'rgba(255,255,255,0.75)', fontSize: 13.5, lineHeight: 21, textAlign: 'center', marginTop: 12 },
+  introBtn: { backgroundColor: AppColors.greenTop, borderRadius: 14, paddingHorizontal: 30, paddingVertical: 14, marginTop: 28 },
+  introBtnText: { fontSize: 15, fontWeight: '800', color: '#16320A' },
+  introBack: { marginTop: 16, padding: 8 },
+  introBackText: { color: 'rgba(255,255,255,0.6)', fontSize: 12.5 },
+  counter: { position: 'absolute', top: 14, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 6 },
+  counterText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+});

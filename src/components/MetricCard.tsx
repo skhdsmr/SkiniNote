@@ -92,6 +92,28 @@ export function MetricRow({
   );
 }
 
+/**
+ * 점수만 보여주는 카드 — 4단계 배지·색 구간 없이 제목 · 점수 · 0~100 막대 하나.
+ * 부위 종합 점수처럼 단계로 끊어 말하지 않고 숫자 자체를 보여줄 때 쓴다.
+ */
+export function ScoreCard({ label, value, unit = '/100' }: { label: string; value: number; unit?: string }) {
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <View style={[monitoringCard(), styles.card]}>
+      <View style={styles.headRow}>
+        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.value}>
+          {Math.round(value)}
+          {unit !== '' && <Text style={styles.unit}>{unit}</Text>}
+        </Text>
+      </View>
+      <View style={styles.scoreTrack}>
+        <View style={[styles.scoreFill, { width: `${pct}%` }]} />
+      </View>
+    </View>
+  );
+}
+
 /** 측정하지 않은 지표 — 0점으로 넣으면 실제로 좋았던 날과 구분이 안 되므로 값 없이 남긴다 */
 export function EmptyMetricCard({ label, text }: { label: string; text: string }) {
   return (
@@ -179,6 +201,8 @@ export function Badge({ text, color, small }: { text: string; color: string; sma
 }
 
 const styles = StyleSheet.create({
+  scoreTrack: { height: 12, borderRadius: 6, backgroundColor: mc.line, overflow: 'hidden', marginTop: 4 },
+  scoreFill: { height: '100%', borderRadius: 6, backgroundColor: mc.greenTop },
   card: { padding: 16 },
   headRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   label: { fontSize: 16, fontWeight: '800', color: mc.ink },

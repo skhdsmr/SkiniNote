@@ -34,7 +34,7 @@ export const DEMO_TARGETS: MonitorTarget[] = [
     spotId: 'demo:arm',
     part: 'rightUpperArm',
     facing: 'front',
-    label: '팔',
+    label: '오른쪽 팔',
     diagnosis: { diagnosed: true, disease: '건선', source: 'self' },
     createdAt: new Date(),
     sessionCount: 0,
@@ -92,6 +92,19 @@ export const DEMO_TARGETS: MonitorTarget[] = [
     createdAt: new Date(),
     sessionCount: 0,
   },
+  {
+    // 팔 아토피 — 기존 '팔 건선'(demo:arm)과 겹치면 안 되므로 spotId·id를 따로 쓴다
+    id: 'tgt_demo_arm_atopy',
+    modelId: 'adultMale',
+    spotId: 'demo:arm_atopy',
+    part: 'leftForearm',
+    facing: 'front',
+    // 건선(오른쪽 팔)과 좌우가 달라야 경과 관찰 지도에서 두 팔이 따로 찍힌다
+    label: '왼쪽 팔',
+    diagnosis: { diagnosed: true, disease: '아토피피부염', source: 'self' },
+    createdAt: new Date(),
+    sessionCount: 0,
+  },
 ];
 
 /**
@@ -112,7 +125,7 @@ export const DEMO_TARGETS: MonitorTarget[] = [
  * 등급이 매겨지는 몸통을 앞에 둬야 그 카드가 점수까지 온전히 보여준다 — 건선이 앞에 오면 같은
  * 자리에 점수 대신 질환명만 적힌다.
  */
-export const VISIBLE_DEMO_TARGET_IDS: readonly string[] = ['tgt_demo_torso', 'tgt_demo_arm'];
+export const VISIBLE_DEMO_TARGET_IDS: readonly string[] = ['tgt_demo_torso', 'tgt_demo_arm', 'tgt_demo_cheek', 'tgt_demo_arm_atopy'];
 
 /** 화면에 올릴 데모 대상만 — 모니터링 목록·이어서 기록하기가 이 목록을 쓴다 */
 export const VISIBLE_DEMO_TARGETS: MonitorTarget[] = DEMO_TARGETS.filter((t) =>

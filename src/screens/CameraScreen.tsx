@@ -12,15 +12,18 @@ import { DUMP_RESULTS, makeDumpDiseases, makeDumpLocalResult } from '../exam/dum
 import { useRecords } from '../context/RecordsContext';
 import { useLeaveGuard } from '../context/LeaveGuardContext';
 import { useMonitoring } from '../context/MonitoringContext';
-import { PART_TO_REGION } from '../monitoring/bodyParts';
+import { PART_TO_REGION, COARSE_OF_PART } from '../monitoring/bodyParts';
+import { sdcFromRepeats } from '../folders/areaTrend';
 import { MonitorTarget } from '../monitoring/types';
-import { ensureFolder, getFolder, recordExam } from '../folders/store';
+import { ensureFolder, getFolder, recordExam, setFolderAreaScore, setFolderRepeatability } from '../folders/store';
 import { folderNameOf } from '../folders/targets';
 import { ExamAnalysis, ExamCapture, ExamKind } from '../exam/examTypes';
 import { toFolderMetrics } from '../exam/examMetrics';
 import ExamStartScreen from './ExamStartScreen';
 import ExamFlow from './ExamFlow';
+import { INSIGHT_ROUTE, type InsightKind } from '../symptoms/groups';
 import ExamResultScreen from './ExamResultScreen';
+import AreaSurveyScreen from './AreaSurveyScreen';
 
 /**
  * 피부 촬영 탭 — 기록 한 건의 전체 흐름을 붙들고 있는 화면.
@@ -37,7 +40,7 @@ import ExamResultScreen from './ExamResultScreen';
  * 않는다 — 이미 정상 피부라고 판단된 사진에 그 모델까지 돌리면 잡음을 병변처럼 읽을 수 있어서,
  * 대신 normalSkinResult로 "이상 없음"(피부 종합 상태 100점, 세부 증상 전부 없음)을 바로 확정한다.
  */
-type Stage = 'start' | 'flow' | 'analyzing' | 'result' | 'error';
+type Stage = 'start' | 'flow' | 'analyzing' | 'survey' | 'result' | 'error';
 
 export default function CameraScreen({ navigation, route }: { navigation: any; route?: any }) {
   const [stage, setStage] = useState<Stage>('start');
@@ -56,6 +59,10 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
   const [followUp, setFollowUp] = useState<{ folderId: string; target: MonitorTarget } | null>(null);
   const [capture, setCapture] = useState<ExamCapture | null>(null);
   const [analysis, setAnalysis] = useState<ExamAnalysis | null>(null);
+  /** 신규 기록의 면적 설문 결과(내부 점수 0~6) — 폴더를 만들 때 함께 저장한다. 정상 피부면 병변이 없어 0 */
+  const [areaScore, setAreaScore] = useState<number | null>(null);
+  /** 반복 촬영 5장에서 구한 면적 측정 오차(SW, 상대값) — 폴더를 만들 때 함께 저장한다 */
+  const [areaSigma, setAreaSigma] = useState<number | null>(null);
   const [linkedFolder, setLinkedFolder] = useState<{ id: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,6 +91,8 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
     setCapture(null);
     setAnalysis(null);
     setLinkedFolder(null);
+    setAreaScore(null);
+    setAreaSigma(null);
     setError(null);
     setResetToken((t) => t + 1);
   }, []);
@@ -113,7 +122,7 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
   // 남은 건 신규 기록의 "경과 관찰에 연동" 하나뿐이라 — 그걸 누르지 않고 나가면 폴더가 만들어지지
   // 않는다 — 아직 연동하지 않은 신규 결과에서만 확인창을 띄운다.
   React.useEffect(() => {
-    setGuarded(stage === 'result' && kind === 'new' && !linkedFolder);
+    setGuarded((stage === 'result' || stage === 'survey') && kind === 'new' && !linkedFolder);
   }, [stage, kind, linkedFolder, setGuarded]);
 
   /**
@@ -235,6 +244,7 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
             photoUri: cap.photoUri,
             // 분석이 합성해 둔 병변 오버레이 — 폴더에서도 결과 화면과 같은 그림을 보여준다
             maskUri: local.maskUri ?? undefined,
+            symptomMaskUris: local.symptomMaskUris ?? undefined,
           });
           const folder = getFolder(cap.folderId);
           if (folder) setLinkedFolder({ id: folder.id, name: folder.name });
@@ -246,7 +256,38 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
         if (cap.kind !== 'quick') span('기록 저장', () => saveExamRecord(cap, local, predictedDisease));
 
         setAnalysis({ local, diseases, severitySupported });
-        setStage('result');
+
+        /*
+          신규 기록: 고스트를 보며 다시 찍은 4장으로 이 부위의 측정 오차를 정한 뒤, 결과 앞에서
+          면적 설문을 받는다. 정상 피부는 병변이 없어 설문 없이 면적 0으로 확정한다.
+        */
+        if (cap.kind === 'new') {
+          const indexOf = (r: LocalAnalysisResult) => r.scaleArea?.index ?? r.maskAreaPct;
+          const values = [indexOf(local)];
+          for (const rep of cap.repeats ?? []) {
+            try {
+              const r = DUMP_RESULTS
+                ? makeDumpLocalResult(rep.session.id)
+                : isNormalSkin
+                  ? null
+                  : isAtopic
+                    ? await analyzeLocal(rep.photoUri, { colorGain, scale: rep.session.scale })
+                    : await unsupportedDiseaseResult(rep.photoUri, colorGain, rep.session.scale);
+              if (r) values.push(indexOf(r));
+            } catch {
+              // 반복 촬영 한 장이 분석에 실패해도 나머지로 오차를 구한다
+            }
+          }
+          setAreaSigma(sdcFromRepeats(values)?.sw ?? null);
+          if (isNormalSkin) {
+            setAreaScore(0);
+            setStage('result');
+          } else {
+            setStage('survey');
+          }
+        } else {
+          setStage('result');
+        }
         /*
           여기서 닫는 값은 **결과 화면이 그려지기 직전**까지다. setStage 뒤의 렌더(오버레이
           data URI를 <Image>가 디코딩하는 비용 포함)는 React가 이 함수 밖에서 하므로 잡히지 않는다 —
@@ -292,16 +333,28 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
       itchVas: capture.itchVas,
       photoUri: capture.photoUri,
       maskUri: analysis.local.maskUri ?? undefined,
+      symptomMaskUris: analysis.local.symptomMaskUris ?? undefined,
     });
+    if (areaScore != null) setFolderAreaScore(id, areaScore);
+    if (areaSigma != null) setFolderRepeatability(id, areaSigma);
     const folder = getFolder(id);
     if (folder) setLinkedFolder({ id: folder.id, name: folder.name });
     return id;
-  }, [capture, analysis, findTarget]);
+  }, [capture, analysis, findTarget, areaScore, areaSigma]);
 
   const openFolder = useCallback(
     (folderId: string) => {
       setGuarded(false);
       navigation.navigate('MonitoringFolder', { folderId });
+    },
+    [navigation, setGuarded],
+  );
+
+  /** 증상 묶음 버튼 — 트리거 탐정·긁기 패턴·회복 트래커. 폴더(지켜보는 자리)의 기록을 읽는 화면이다 */
+  const openInsight = useCallback(
+    (folderId: string, kind: InsightKind) => {
+      setGuarded(false);
+      navigation.navigate(INSIGHT_ROUTE[kind], { folderId });
     },
     [navigation, setGuarded],
   );
@@ -343,14 +396,30 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
     );
   }
 
+  if (stage === 'survey' && capture && analysis) {
+    return (
+      <AreaSurveyScreen
+        group={COARSE_OF_PART[capture.target.part]}
+        photoUri={capture.photoUri}
+        overlayUri={analysis.local.maskUri}
+        onSubmit={(score) => {
+          setAreaScore(score);
+          setStage('result');
+        }}
+      />
+    );
+  }
+
   if (stage === 'result' && capture && analysis) {
     return (
       <ExamResultScreen
         capture={capture}
         analysis={analysis}
         linkedFolder={linkedFolder}
+        areaScore={areaScore}
         onLink={linkToFolder}
         onOpenFolder={openFolder}
+        onOpenInsight={openInsight}
         onOpenRecords={goToRecords}
         onClose={() => guardedAction(() => navigation.navigate('Home'))}
       />

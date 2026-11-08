@@ -2,21 +2,20 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  monitoringColors as mc, monitoringCard, DISPLAY_SCALE,
-  SKIN_SEGMENTS, ITCH_SEGMENTS, SLEEP_SEGMENTS, SYMPTOM_SEGMENTS_BASE, SYMPTOMS,
+  monitoringColors as mc, DISPLAY_SCALE,
+  SKIN_SEGMENTS, ITCH_SEGMENTS, SLEEP_SEGMENTS,
 } from '../theme';
 import { useFolder, folderHasSeverity } from '../store';
-import LesionThumb from '../components/LesionThumb';
 import PhotoZoomModal from '../components/PhotoZoomModal';
-import { MetricCard, MetricRow, EmptyMetricCard } from '../../components/MetricCard';
+import { MetricCard, EmptyMetricCard, ScoreCard } from '../../components/MetricCard';
+import { partDisplayOf } from '../easi';
+import SymptomGroupCard from '../../components/SymptomGroupCard';
+import SymptomLayerPhoto from '../../components/SymptomLayerPhoto';
+import { INSIGHT_ROUTE } from '../../symptoms/groups';
 import { useProfile } from '../../context/ProfileContext';
-import { plainSiteLabel } from '../../models';
 
 const PAGE_PAD = 16;
-const PHOTO_GAP = 10;
 const PHOTO_SIZE = 96; // 휴대폰 화면 기준 작은 크기 — 두 장이 카드 하나 안에 나란히 들어간다
-
-const SYMPTOM_ORDER = ['redness', 'bumps', 'scratch', 'thickening'];
 
 function shortDate(dateKey) {
   const [y, m, d] = dateKey.split('-');
@@ -51,7 +50,7 @@ export default function MonitoringDetailScreen({ navigation, route }) {
 
   // 4가지 증상·IGA 모델은 아토피피부염 채점 기준이라, 이 폴더의 진단명이 그게 아니면 두 카드 다 숨긴다
   const hasSeverity = folderHasSeverity(folder);
-  const skinValue = DISPLAY_SCALE.iga(record.iga); // 그래프·요약 박스와 같은 0~100 표시값
+  const partDisplay = partDisplayOf(record, folder.areaScore); // 증상 4종 단계 × 내부 면적 점수 → 0~100
   const itchValue = DISPLAY_SCALE.itch(record.itchVas);
 
   const openZoom = (page) => { setZoomPage(page); setZoomRecord(record); };
@@ -63,47 +62,37 @@ export default function MonitoringDetailScreen({ navigation, route }) {
           <Text style={{ fontSize: 20, color: mc.ink }}>‹</Text>
           <View>
             <Text style={styles.topBarTitle}>{shortDate(record.date)} 상세 결과</Text>
-            <Text style={styles.topBarSub} numberOfLines={1}>{plainSiteLabel(folder.name)}</Text>
+            <Text style={styles.topBarSub} numberOfLines={1}>{folder.name}</Text>
           </View>
         </TouchableOpacity>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: PAGE_PAD, gap: 12, paddingBottom: 24 }}>
 
-        {/* 촬영 사진 — 원본과 증상 부위 표시를 작은 박스 하나 안에 나란히 보여준다. 탭하면
-            그 이미지가 바로 보이는 페이지로 크게 열린다. */}
-        <View style={[monitoringCard(), styles.photoCard]}>
-          <View style={styles.photoRow}>
-            <TouchableOpacity style={styles.photoCol} activeOpacity={0.85} onPress={() => openZoom(0)}>
-              <LesionThumb photo={record.photo} mode="photo" size={PHOTO_SIZE} />
-              <Text style={styles.photoCaption}>촬영 이미지 (원본)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.photoCol} activeOpacity={0.85} onPress={() => openZoom(1)}>
-              <LesionThumb photo={record.photo} overlay={overlay} mode="overlay" size={PHOTO_SIZE} />
-              <Text style={styles.photoCaption}>증상 부위 표시</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        {/* 촬영 사진 — 원본과 증상 부위 표시를 작은 박스 하나 안에 나란히 보여주고, 아래 칩으로
+            증상별(홍반·구진·찰상·태선화) 검출 영역을 켜고 끈다. 탭하면 그 이미지가 바로 보이는
+            페이지로 크게 열린다. */}
+        <SymptomLayerPhoto
+          photo={record.photo}
+          overlay={overlay}
+          layers={record.symptomOverlays}
+          values={record}
+          size={PHOTO_SIZE}
+          onZoom={openZoom}
+        />
 
         {hasSeverity && (
           <>
-            {/* 1) 피부 종합 상태 — 이 상세 결과 페이지에서만 몇 점 만점인지("/100")를 값 옆에 적는다 */}
-            <MetricCard label="피부 종합 상태" value={skinValue} unit="/100" segments={SKIN_SEGMENTS} />
+            {/* 1) 부위 종합 점수 — 이 상세 결과 페이지에서만 몇 점 만점인지("/100")를 값 옆에 적는다 */}
+            {partDisplay != null
+              ? <ScoreCard label="부위 종합 점수" value={partDisplay} />
+              : <EmptyMetricCard label="부위 종합 점수" text="면적 정보가 없어 계산하지 못했어요" />}
 
-            {/* 2) 4가지 증상 */}
-            <View style={[monitoringCard(), styles.card]}>
-              <Text style={styles.cardLabel}>4가지 증상</Text>
-              {SYMPTOM_ORDER.map((key, i) => (
-                <MetricRow
-                  key={key}
-                  label={SYMPTOMS[key].label}
-                  value={DISPLAY_SCALE.symptom(record[key])}
-                  segments={SYMPTOM_SEGMENTS_BASE}
-                  first={i === 0}
-                  hideValue
-                />
-              ))}
-            </View>
+            {/* 2) 증상 요약 — 4가지 증상을 염증 반응·긁은 흔적·만성 흔적 3묶음으로 보여준다 */}
+            <SymptomGroupCard
+              values={record}
+              onOpenInsight={(kind) => navigation.navigate(INSIGHT_ROUTE[kind], { folderId })}
+            />
           </>
         )}
 
@@ -134,11 +123,4 @@ const styles = StyleSheet.create({
   topBarTitle: { fontSize: 15, fontWeight: '700', color: mc.ink },
   topBarSub: { fontSize: 11, color: mc.sub, maxWidth: 160 },
 
-  photoCard: { padding: 12 },
-  photoRow: { flexDirection: 'row', justifyContent: 'center', gap: PHOTO_GAP },
-  photoCol: { alignItems: 'center' },
-  photoCaption: { fontSize: 10.5, color: mc.sub, marginTop: 6, textAlign: 'center' },
-
-  card: { padding: 16 },
-  cardLabel: { fontSize: 16, fontWeight: '800', color: mc.ink, marginBottom: 12 },
 });

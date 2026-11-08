@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { AppColors } from '../theme';
-import { CoarseGroupId } from '../monitoring/bodyParts';
+import { BodySide, CoarseGroupId, SidedGroupId } from '../monitoring/bodyParts';
 
 // 정면으로 서 있는 몸 윤곽을 4덩어리(머리·몸통·팔·다리) 벡터 도형으로 직접 그린다 — 이미지
 // 파일 없이 코드로만 그려서, 어느 플랫폼에서도 선명하고 별도 에셋 로딩이 필요 없다.
@@ -63,15 +63,36 @@ const REGION_PATHS: Record<CoarseGroupId, string> = {
 };
 
 /**
+ * 팔·다리 path는 좌우 두 subpath(M...Z M...Z)를 이은 것이다 — 첫째가 그림의 왼쪽(= 사용자의 오른쪽),
+ * 둘째가 그림의 오른쪽(= 사용자의 왼쪽). 한쪽만 강조할 때 그 subpath만 꺼내 쓴다.
+ */
+function splitSides(path: string): Record<BodySide, string> {
+  const [first, second] = path.split(' M');
+  return { right: first, left: `M${second}` };
+}
+const SIDE_PATHS: Record<'arm' | 'leg', Record<BodySide, string>> = {
+  arm: splitSides(ARM_PATH),
+  leg: splitSides(LEG_PATH),
+};
+
+/** 그림의 좌우 어느 쪽인지 — 앞에서 본 몸이라 그림의 왼쪽이 사용자의 오른쪽이다 */
+const sideAt = (vx: number): BodySide => (vx < CX ? 'right' : 'left');
+
+/**
  * 덩어리마다 동그라미 표시(partMarkers)를 찍을 자리 — 그 덩어리 도형 안쪽에 확실히 들어가도록
  * 손으로 눈대중한 좌표다. 팔·다리는 좌우 두 곳(REGION_PATHS의 두 subpath 각각) 한가운데씩 찍어서,
  * "이 덩어리 전체"가 아니라 "여기쯤"이라는 느낌을 준다 — 좌우를 구분하는 자리는 아니다.
  */
-const GROUP_MARKERS: Record<CoarseGroupId, BodyPoint2D[]> = {
+const GROUP_MARKERS: Record<CoarseGroupId | SidedGroupId, BodyPoint2D[]> = {
   head: [{ x: 163, y: 90 }],
   torso: [{ x: 163, y: 340 }],
+  // 좌우를 나누지 않은 기록은 양쪽에 찍고, 좌우를 아는 기록은 그쪽 한 곳에만 찍는다
   arm: [{ x: 50, y: 230 }, { x: 277, y: 230 }],
   leg: [{ x: 110, y: 650 }, { x: 217, y: 650 }],
+  armRight: [{ x: 50, y: 230 }],
+  armLeft: [{ x: 277, y: 230 }],
+  legRight: [{ x: 110, y: 650 }],
+  legLeft: [{ x: 217, y: 650 }],
 };
 
 /**
@@ -230,20 +251,27 @@ function markerSpot(anchor: BodyPoint2D, i: number, n: number, r: number): BodyP
  */
 export default function Body2DView({
   highlightGroup,
+  highlightSide,
+  showSideLabels,
   marker,
   partMarkers,
   onPick,
 }: {
-  /** 지금 선택된 덩어리 — 좌우를 나누지 않으므로 팔/다리는 양쪽 다 이 색으로 칠한다 */
+  /** 지금 선택된 덩어리 — highlightSide를 안 주면 팔/다리는 양쪽 다 이 색으로 칠한다 */
   highlightGroup?: CoarseGroupId | null;
+  /** 팔/다리에서 이쪽만 칠한다 (사용자 기준 왼쪽/오른쪽) */
+  highlightSide?: BodySide | null;
+  /** 그림 아래 양옆에 "오른쪽/왼쪽"을 적는다 — 좌우를 구분하는 화면에서 어느 쪽이 어느 쪽인지 알려준다 */
+  showSideLabels?: boolean;
   /** 마지막으로 탭한 위치(뷰 좌표) — 칩으로 골랐을 때는 부모가 null로 지운다 */
   marker?: BodyPoint2D | null;
   /**
    * 덩어리별 동그라미 목록 — **병변 하나에 하나씩** (전신 결과 화면이 쓴다).
    * 목록이 둘 이상이면 그 덩어리 자리 둘레에 고르게 흩어 그린다(markerSpot).
    */
-  partMarkers?: Partial<Record<CoarseGroupId, PartMarkerStyle[]>>;
-  onPick?: (group: CoarseGroupId, point: BodyPoint2D) => void;
+  partMarkers?: Partial<Record<CoarseGroupId | SidedGroupId, PartMarkerStyle[]>>;
+  /** side: 팔/다리를 눌렀을 때 어느 쪽인지(사용자 기준), 머리·몸통이면 null */
+  onPick?: (group: CoarseGroupId, point: BodyPoint2D, side: BodySide | null) => void;
 }) {
   const pulse = useRef(new Animated.Value(1)).current;
   const wrapRef = useRef<View>(null);
@@ -280,9 +308,9 @@ export default function Body2DView({
 
   /** 렌더링과 탭 판정이 같은 자리 계산을 쓰도록 미리 펼쳐 둔다 */
   const flatMarkers = useMemo(() => {
-    const out: { key: string; group: CoarseGroupId; pt: BodyPoint2D; style: PartMarkerStyle }[] = [];
+    const out: { key: string; group: CoarseGroupId | SidedGroupId; pt: BodyPoint2D; style: PartMarkerStyle }[] = [];
     if (!partMarkers) return out;
-    (Object.keys(partMarkers) as CoarseGroupId[]).forEach((group) => {
+    (Object.keys(partMarkers) as (CoarseGroupId | SidedGroupId)[]).forEach((group) => {
       const list = partMarkers[group]!;
       GROUP_MARKERS[group].forEach((anchor, ai) => {
         list.forEach((style, i) => {
@@ -328,7 +356,7 @@ export default function Body2DView({
 
     const group = classifyGroup(vx, vy);
     if (!group || !onPick) return;
-    onPick(group, { x: localX, y: localY });
+    onPick(group, { x: localX, y: localY }, group === 'arm' || group === 'leg' ? sideAt(vx) : null);
   };
 
   return (
@@ -343,9 +371,28 @@ export default function Body2DView({
                 덩어리 넷 대신 이 도형 하나로만 바탕을 채운다. */}
             <Path d={OUTLINE_PATH} fill={BODY_COLOR} />
             {/* 2) 고른 덩어리만 그 도형으로 덮어 칠한다 — 바탕과 넉넉히 겹치므로 실금이 생기지 않는다 */}
-            {highlightGroup && <Path d={REGION_PATHS[highlightGroup]} fill={HIGHLIGHT_COLOR} />}
+            {highlightGroup && (
+              <Path
+                d={
+                  highlightSide && (highlightGroup === 'arm' || highlightGroup === 'leg')
+                    ? SIDE_PATHS[highlightGroup][highlightSide]
+                    : REGION_PATHS[highlightGroup]
+                }
+                fill={HIGHLIGHT_COLOR}
+              />
+            )}
             {/* 3) 바깥 테두리선은 맨 위에 한 번만 — 안쪽 경계(겨드랑이·가랑이 등)에는 선을 긋지 않는다 */}
             <Path d={OUTLINE_PATH} fill="none" stroke={OUTLINE_COLOR} strokeWidth={2.5} strokeLinejoin="round" />
+            {showSideLabels && (
+              <>
+                <SvgText x={VIEW_X + 8} y={VIEW_Y + VIEW_H - 12} fontSize={26} fontWeight="700" fill={OUTLINE_COLOR}>
+                  오른쪽
+                </SvgText>
+                <SvgText x={VIEW_X + VIEW_W - 8} y={VIEW_Y + VIEW_H - 12} fontSize={26} fontWeight="700" fill={OUTLINE_COLOR} textAnchor="end">
+                  왼쪽
+                </SvgText>
+              </>
+            )}
             {/* 4) 부위별 동그라미 — 테두리 위에 그려서 항상 또렷하게 보인다. count가 있으면
                 가운데에 숫자(존재하는 세부 증상 개수)를 함께 적어, 슬라이더로 회차를 넘길 때
                 동그라미가 작아지는 것과 숫자가 줄어드는 것을 같이 볼 수 있게 한다. */}

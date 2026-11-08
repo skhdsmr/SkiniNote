@@ -4,6 +4,8 @@
  * - ATOPIC_PHOTOS / ATOPIC_OVERLAYS: 프리셋 폴더 "팔 건선" 전용
  * - CHEEK_PHOTOS  / CHEEK_OVERLAYS : 프리셋 폴더 "머리 주사"·"얼굴 아토피" 전용
  * - TORSO_PHOTOS  / TORSO_OVERLAYS : 프리셋 폴더 "몸통 아토피" 전용 (실사진 1장을 매 회차 재사용)
+ * - ARM_PHOTOS    / ARM_OVERLAYS   : 프리셋 폴더 "팔 아토피" 전용 (실사진 1장을 매 회차 재사용)
+ * - FACE_PHOTOS   / FACE_OVERLAYS  : 프리셋 폴더 "얼굴 아토피" 전용 (성인 얼굴(H1_300935_P1_L0), 실사진 1장을 매 회차 재사용)
  *
  * 오버레이는 **tools/bake_dump_overlays.py로 미리 구운 것**이다. 앱 안에서 그때그때 세그를
  * 돌려 보려 했지만, 데모 기록이 40장을 넘어 시작할 때 다 돌릴 수 없고 화면에 보일 때만 돌리면
@@ -80,4 +82,26 @@ export const TORSO_PHOTOS = [
 
 export const TORSO_OVERLAYS = [
   require('../../assets/dump_overlays/torso/01.jpg'),
+];
+
+/*
+  얼굴 아토피 폴더 — 성인 얼굴 실사진 1장(H1_300935_P1_L0)을 모든 회차에 재사용한다.
+  배열 길이가 1이라 store.js의 photoAt 나머지 연산이 항상 0번을 가리킨다(TORSO와 같은 방식).
+  오버레이도 이 한 장에서 구운 것 하나뿐이라 사진과 짝이 어긋나지 않는다.
+*/
+export const FACE_PHOTOS = [
+  require('../../assets/dump_photos/face/01.jpg'),
+];
+
+export const FACE_OVERLAYS = [
+  require('../../assets/dump_overlays/face/01.jpg'),
+];
+
+// 팔 아토피 폴더 — 실사진 1장을 모든 회차에 재사용한다(FACE와 같은 방식, 오버레이도 이 한 장에서 구움).
+export const ARM_PHOTOS = [
+  require('../../assets/dump_photos/arm/01.jpg'),
+];
+
+export const ARM_OVERLAYS = [
+  require('../../assets/dump_overlays/arm/01.jpg'),
 ];

@@ -141,24 +141,16 @@ export default function RecordsScreen({ route }: { route?: any }) {
       </View>
 
       <View style={{ height: 10 }} />
-      {/* 이 탭에서 가장 자주 쓰는 길 — 지켜보는 자리별 추이를 보러 간다. 날짜를 골라야만 나오는
+      {/* 이 탭에서 가장 자주 쓰는 길 — 지켜보는 자리를 몸 그림으로 보고 그 자리의 경과로 들어간다.
+          (예전의 "전신 결과"는 이 화면으로 합쳤다.) 날짜를 골라야만 나오는
           그날의 분석 결과보다 먼저 두어, 스크롤하지 않아도 항상 바로 보인다. */}
       <ActionBox
         icon="timeline"
         title="경과 관찰"
-        caption={folders.length ? `${folders.length}곳을 지켜보고 있어요` : '아직 지켜보는 자리가 없어요'}
+        caption={folders.length ? `${folders.length}곳을 지켜보고 있어요 · 몸 그림으로 한눈에` : '아직 지켜보는 자리가 없어요'}
         trailing="chevron-right"
         accent
         onPress={() => navigation.navigate('Monitoring')}
-      />
-      <View style={{ height: 10 }} />
-      <ActionBox
-        icon="accessibility-new"
-        title="전신 결과"
-        caption="전신 분석 결과 모아보기"
-        trailing="chevron-right"
-        accent
-        onPress={() => navigation.navigate('WholeBody')}
       />
 
       {selectedKey != null && (

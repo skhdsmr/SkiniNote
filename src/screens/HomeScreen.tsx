@@ -1,14 +1,16 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppColors, cardDecoration } from '../theme';
-import { CareItem, ITCH_SURVEY_ROUTINE, SKIN_RECORD_ROUTINE, plainSiteLabel } from '../models';
+import { CareItem, ITCH_SURVEY_ROUTINE, SKIN_RECORD_ROUTINE } from '../models';
 import { SectionHeader, RoutineRowContent } from '../components/widgets';
 import { useRoutines } from '../context/RoutineContext';
 import { useProfile } from '../context/ProfileContext';
 import { useMonitoring } from '../context/MonitoringContext';
-import { useLatestMonitoringRecord, folderHasSeverity } from '../folders/store';
-import { DISPLAY_SCALE, skinConditionInfo, itchBand, sleepBand, CHART_SERIES } from '../folders/theme';
+import { useLatestMonitoringRecord, useFolders } from '../folders/store';
+import { overallOfFolders, EASI_SEGMENTS } from '../folders/easi';
+import { COARSE_OF_PART } from '../monitoring/bodyParts';
+import { DISPLAY_SCALE, segmentFor, itchBand, sleepBand, CHART_SERIES } from '../folders/theme';
 import { StatBox } from '../components/MetricCard';
 
 // 경과 관찰 폴더 화면의 요약칸과 같은 원형 배지 아이콘 — 같은 지표는 어느 화면에서 봐도 같게 보이도록
@@ -28,13 +30,15 @@ export default function HomeScreen({ navigation }: { navigation: any }) {
     navigation.navigate('MonitoringDetail', { folderId: latest.folder.id, recordId: latest.record.id });
   };
 
-  // 가장 최근 기록이 어느 부위를 찍은 건지 — 모니터링 대상(target)이 자리를 들고 있다
-  const latestTarget = latest?.folder.targetId ? findTarget(latest.folder.targetId) : undefined;
-  const latestSiteLabel = latestTarget ? plainSiteLabel(latestTarget.label) : undefined;
-  /* 카드 제목의 "(부위) (질환명)" 부분 — 나머지 글자와 다른 색으로 강조해서 눈에 먼저 들어오게
-     한다. 아직 진단을 안 붙인 폴더는 질환명이 없으니 부위까지만("몸통"), 부위조차 못 찾으면
-     빈 문자열이라 카드가 예전처럼 "최근 피부 상태"로 대신한다. */
-  const statusHighlight = [latestSiteLabel, latest?.folder.disease].filter(Boolean).join(' ');
+  // 전체 점수 — 모든 부위의 가장 최근 부위 점수를 가중 합산한다(folders/easi.ts)
+  const folders = useFolders();
+  const overall = useMemo(() => {
+    const { value } = overallOfFolders(folders, (f: any) => {
+      const part = f.targetId ? findTarget(f.targetId)?.part : undefined;
+      return part ? COARSE_OF_PART[part] : null;
+    });
+    return value;
+  }, [folders, findTarget]);
 
   return (
     <ScrollView
@@ -48,8 +52,7 @@ export default function HomeScreen({ navigation }: { navigation: any }) {
 
       <RecentStatusCard
         record={latest?.record}
-        highlight={statusHighlight}
-        hasSeverity={latest ? folderHasSeverity(latest.folder) : false}
+        overall={overall}
         healthConnected={healthConnected}
         onPress={goLatestDetail}
       />
@@ -91,19 +94,13 @@ export default function HomeScreen({ navigation }: { navigation: any }) {
  */
 function RecentStatusCard({
   record,
-  highlight,
-  hasSeverity,
+  overall,
   healthConnected,
   onPress,
 }: {
-  record?: { iga: number; itchVas: number; sleepScore: number };
-  /** 제목 가운데의 "(부위) (질환명)" — 다른 글자와 다른 색으로 강조한다. 빈 문자열이면 "최근 피부 상태"로 대신한다 */
-  highlight: string;
-  /**
-   * 가장 최근 기록이 속한 폴더의 진단명이 아토피피부염인지 — IGA 점수·등급 배지를 보여줄지 정한다.
-   * 아토피가 아니면 점수 자체가 없는 지표라 배지 없이 값만 남긴다(가려움·수면과 같은 자리라 칸은 늘 셋).
-   */
-  hasSeverity: boolean;
+  record?: { itchVas: number; sleepScore: number };
+  /** 피부 종합 점수(0~100, 높을수록 좋음) — 부위 점수를 낼 수 없으면 null */
+  overall: number | null;
   healthConnected: boolean;
   onPress: () => void;
 }) {
@@ -117,30 +114,21 @@ function RecentStatusCard({
     );
   }
 
-  const skinValue = DISPLAY_SCALE.iga(record.iga);
   const itchValue = DISPLAY_SCALE.itch(record.itchVas);
   const sleepValue = healthConnected ? record.sleepScore : null;
 
   return (
     <Pressable onPress={onPress} style={[cardDecoration(), styles.statusCard]}>
       <View style={styles.statusHead}>
-        <Text style={styles.statusTitle} numberOfLines={1}>
-          {highlight ? (
-            <>
-              최근 <Text style={styles.statusTitleHighlight}>{highlight}</Text> 상태
-            </>
-          ) : (
-            '최근 피부 상태'
-          )}
-        </Text>
+        <Text style={styles.statusTitle} numberOfLines={1}>최근 상태</Text>
         <View style={{ flex: 1 }} />
         <MaterialIcons name="chevron-right" size={20} color={AppColors.sub} />
       </View>
       <View style={styles.statusRow}>
         <StatBox
-          label="피부 종합 상태"
-          value={`${skinValue}`}
-          band={hasSeverity ? skinConditionInfo(skinValue) : undefined}
+          label="피부 종합 점수"
+          value={overall == null ? '-' : `${overall}`}
+          band={overall == null ? undefined : segmentFor(overall, EASI_SEGMENTS)}
           icon={SKIN_ICON}
           circleColor={CHART_SERIES.skin.color}
         />
@@ -254,7 +242,6 @@ const styles = StyleSheet.create({
   statusCard: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16 },
   statusHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   statusTitle: { fontSize: 16.5, fontWeight: '800', color: AppColors.ink, flexShrink: 1 },
-  statusTitleHighlight: { color: AppColors.greenMuted },
   statusRow: { flexDirection: 'row', gap: 8 },
 
   emptyStatus: { alignItems: 'center', paddingVertical: 28, paddingHorizontal: 20 },

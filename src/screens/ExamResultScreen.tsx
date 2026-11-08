@@ -10,10 +10,10 @@ import {
   ITCH_SEGMENTS,
   SKIN_SEGMENTS,
   SLEEP_SEGMENTS,
-  SYMPTOM_SEGMENTS_BASE,
 } from '../folders/theme';
 import { folderNameOf } from '../folders/targets';
-import { useLatestMonitoringRecord } from '../folders/store';
+import { useLatestMonitoringRecord, getFolder } from '../folders/store';
+import { partDisplayOf } from '../folders/easi';
 import { plainSiteLabel } from '../models';
 import { LesionBox, LesionRegionResult } from '../ai/analyzeLocal';
 import { ExamAnalysis, ExamCapture } from '../exam/examTypes';
@@ -21,17 +21,34 @@ import { DUMP_RESULTS } from '../exam/dumpAnalysis';
 import { igaDisplayValue, itchDisplayValue, SIGN_DISPLAY, SIGN_ORDER, signDisplayValue } from '../exam/examMetrics';
 import { useMonitoring } from '../context/MonitoringContext';
 import { useProfile } from '../context/ProfileContext';
-import { MetricCard, MetricRow, EmptyMetricCard } from '../components/MetricCard';
+import { MetricCard, EmptyMetricCard, ScoreCard } from '../components/MetricCard';
+import SymptomGroupCard from '../components/SymptomGroupCard';
+import SymptomLayerPhoto from '../components/SymptomLayerPhoto';
+import { SYMPTOM_GROUPS, type InsightKind, type SymptomKey } from '../symptoms/groups';
 
 /** 사용자가 직접 고를 수 있는 진단명 — 분류 모델의 클래스와 같은 집합에 "직접 입력"을 더한 것 */
 const DIAGNOSES = ['아토피피부염', '건선', '여드름', '주사', '지루', '직접 입력'];
 
 /**
- * 부위별 증상 칩을 2×2로 고정 배치하기 위한 줄 나누기 — [피부 붉기, 오돌토돌함] / [긁은 상처,
- * 피부 두꺼워짐]. flexWrap에 맡기면 칩 너비·화면 폭에 따라 한 줄에 3개+1개처럼 들쭉날쭉하게
- * 잘려서, 항상 이 순서·이 줄 구성으로 보이도록 미리 2개씩 묶어 둔다.
+ * 부위별 증상 카드를 화면에 보여줄지.
+ *
+ * false로 두면 **화면에서만 사라진다** — 판정 단위(regions) 계산과 카드 컴포넌트는 그대로 둔다.
+ * 증상 요약(3묶음)과 사진의 증상 레이어가 같은 정보를 이미 보여줘서 일단 내려 두었다. 다시 켤 때는
+ * 이 상수만 true로 되돌리면 된다(경과 관찰 폴더 화면의 같은 이름 상수도 함께).
  */
-const SIGN_ROWS = [SIGN_ORDER.slice(0, 2), SIGN_ORDER.slice(2, 4)];
+const SHOW_REGION_SYMPTOMS = false;
+
+/**
+ * 분석 결과의 sign 등급 → 기록 필드(0~10 스케일) 값. 증상 요약 카드·증상 레이어가 같은 값을 읽는다
+ * (경과 관찰 기록에 저장되는 값과 같은 환산 — examMetrics.toFolderMetrics).
+ */
+function symptomValuesOf(signs: { sign: (typeof SIGN_ORDER)[number]; grade: number }[]): Record<SymptomKey, number> {
+  const out: Record<SymptomKey, number> = { redness: 0, bumps: 0, scratch: 0, thickening: 0 };
+  signs.forEach((s) => {
+    out[SIGN_DISPLAY[s.sign].recordKey] = Math.round(signDisplayValue(s.sign, s.grade)) / 10;
+  });
+  return out;
+}
 
 /**
  * 피부 촬영 분석 결과 화면.
@@ -54,17 +71,23 @@ export default function ExamResultScreen({
   capture,
   analysis,
   linkedFolder,
+  areaScore,
   onLink,
   onOpenFolder,
+  onOpenInsight,
   onOpenRecords,
   onClose,
 }: {
   capture: ExamCapture;
   analysis: ExamAnalysis;
   linkedFolder: { id: string; name: string } | null;
+  /** 신규 기록의 면적 설문 결과(내부 점수). 이어서 기록은 폴더에 저장된 값을 쓰고, 바로 스캔은 없다 */
+  areaScore?: number | null;
   /** 이 자리로 경과 관찰 폴더를 만들고 이번 기록을 첫 기록으로 넣는다. 만든(또는 이미 있던) 폴더 id를 그대로 돌려준다 */
   onLink: () => string;
   onOpenFolder: (folderId: string) => void;
+  /** 증상 묶음 버튼(트리거 탐정·긁기 패턴·회복 트래커)이 여는 특화 화면 */
+  onOpenInsight?: (folderId: string, kind: InsightKind) => void;
   /** 기록 탭으로 넘어간다 (저장은 이미 끝나 있다) */
   onOpenRecords: () => void;
   onClose: () => void;
@@ -80,7 +103,12 @@ export default function ExamResultScreen({
   // 진단명을 결과 화면에서 고칠 수 있어서, 대상은 항상 저장소의 최신 상태를 읽는다
   const target = findTarget(capture.target.id) ?? capture.target;
   const disease = target.diagnosis?.disease;
-  const skinValue = igaDisplayValue(analysis.local.igaGrade);
+  // 피부 종합 상태 = IGA × 면적 점수(내부 값)를 100점으로 환산 — 면적은 신규는 방금 설문, 이어서는 폴더에 저장된 값
+  const area = isNew ? areaScore : isFollowUp && capture.folderId ? getFolder(capture.folderId)?.areaScore : null;
+  const skinValue = partDisplayOf({ iga: analysis.local.igaGrade }, area);
+  const symptomValues = useMemo(() => symptomValuesOf(analysis.local.signs), [analysis]);
+  // 특화 화면(트리거 탐정 등)은 지켜보는 자리의 기록이 쌓여야 의미가 있다 — 폴더가 이미 있을 때만 연다
+  const openInsight = linkedFolder && onOpenInsight ? (kind: InsightKind) => onOpenInsight(linkedFolder.id, kind) : undefined;
 
   // 하단 버튼 문구 — 신규는 "만들 폴더 이름", 이어서 기록은 "이미 있는 폴더 이름"을 그대로 보여준다
   const footerLabel = isQuick
@@ -117,7 +145,12 @@ export default function ExamResultScreen({
           </View>
         )}
 
-        <PhotoPair uri={capture.photoUri} maskUri={analysis.local.maskUri ?? null} />
+        <PhotoPair
+          uri={capture.photoUri}
+          maskUri={analysis.local.maskUri ?? null}
+          layerUris={analysis.local.symptomMaskUris}
+          values={symptomValues}
+        />
 
         {/* 이어서 기록은 이미 이름이 정해진 자리라 진단명을 다시 묻지 않는다 */}
         {!isFollowUp && (
@@ -134,21 +167,20 @@ export default function ExamResultScreen({
             근거 없는 값이라 이 블록을 통째로 보여주지 않는다. */}
         {analysis.severitySupported && (
           <>
-            <MetricCard
-              label="피부 종합 상태"
-              value={skinValue}
-              unit="/100"
-              segments={SKIN_SEGMENTS}
-            />
+            {skinValue != null ? (
+              <ScoreCard label="피부 종합 상태" value={skinValue} />
+            ) : (
+              <EmptyMetricCard label="피부 종합 상태" text="면적 정보가 없어 계산하지 못했어요" />
+            )}
 
-            <SymptomCard analysis={analysis} />
+            <SymptomGroupCard values={symptomValues} onOpenInsight={openInsight} />
 
             {/* 부위별 증상은 "4가지 증상" 바로 다음 — 그 카드가 대표(가장 나쁜) 판정 단위 하나의
                 등급을 보여주는 자리이니, 병변이 여러 곳일 때 그 대표값이 어디서 왔는지를 바로
                 이어서 펼쳐 보여준다(경과 관찰 폴더의 상세 결과와 같은 순서). 병변이 한 곳뿐이면
                 위 PhotoPair의 마스크 오버레이로 이미 위치·모양을 보여줬으니 여기서 또 크롭 한
                 장을 반복할 이유가 없다. */}
-            {analysis.local.regions.length > 1 && (
+            {SHOW_REGION_SYMPTOMS && analysis.local.regions.length > 1 && (
               <RegionSymptomsCard photoUri={capture.photoUri} regions={analysis.local.regions} />
             )}
           </>
@@ -283,71 +315,53 @@ function DiseaseCard({
   );
 }
 
-/** 4가지 증상을 카드 하나에 모아 보여준다 */
-function SymptomCard({ analysis }: { analysis: ExamAnalysis }) {
-  const byKey = useMemo(
-    () => Object.fromEntries(analysis.local.signs.map((s) => [s.sign, s])),
-    [analysis],
-  );
-  return (
-    <View style={[monitoringCard(), styles.card]}>
-      <Text style={styles.cardLabel}>4가지 증상</Text>
-      {SIGN_ORDER.map((sign, i) => {
-        const found = byKey[sign];
-        // signDisplayValue는 원래(낮을수록 좋음) 스케일이라, 다른 카드처럼 "높을수록 좋음"으로
-        // 보여주려면 100에서 뺀다 — SYMPTOM_SEGMENTS_BASE도 이미 그 방향으로 정의돼 있다.
-        // (값이 없으면 원래 스케일에서 0 = 정상으로 보고, 뒤집은 값도 100 = 정상으로 남는다)
-        const raw = found ? signDisplayValue(sign, found.grade) : 0;
-        const value = 100 - raw;
-        return (
-          <MetricRow
-            key={sign}
-            label={SIGN_DISPLAY[sign].label}
-            value={value}
-            segments={SYMPTOM_SEGMENTS_BASE}
-            first={i === 0}
-            hideValue
-          />
-        );
-      })}
-    </View>
-  );
-}
-
 /**
- * 촬영 이미지 원본 + 분할 마스크 오버레이 — 상세 결과 화면의 사진 카드와 같은 배치.
+ * 촬영 이미지 원본 + 분할 마스크 오버레이 + 증상 레이어 칩 — 상세 결과 화면의 사진 카드와 같은 배치.
  *
  * 오버레이는 bbox를 사각형으로 그리는 대신 analyzeLocal이 이미 합성해 준 이미지(maskUri)를
  * 그대로 보여준다 — 실제 병변 모양(반투명 색 면)과 그 경계(흰 테두리 + 어두운 테두리 한 겹, 어떤
  * 피부색 위에서도 보이도록)가 그대로 담겨 있어서, 사각형 박스보다 "어디가, 어떤 모양으로" 병변인지
- * 정확히 보여준다(ai/maskOverlay.ts 참고). 판정 단위가 하나뿐이면 항상 붉은색(REGION_COLORS[0])
- * 하나로 칠해진다.
+ * 정확히 보여준다(ai/maskOverlay.ts 참고).
  *
  * 마스크를 못 찾았거나(비정상 피부·정상 피부 등) 합성에 실패하면 maskUri가 null이라 원본을
  * 그대로 보여주고, 캡션으로 그 사실을 알린다 — 빈 오버레이를 사각 박스로 억지로 채우지 않는다.
+ * 증상별 칩(SymptomLayerPhoto)은 모델이 증상별 마스크를 내줄 때(symptomMaskUris) 증상마다 따로
+ * 켜고 끄고, 아직 없으면 전체 영역만 켜고 끈다.
  */
-function PhotoPair({ uri, maskUri }: { uri: string; maskUri: string | null }) {
-  const overlayCaption = maskUri ? '증상 부위 표시' : '증상 부위를 찾지 못했어요';
+function PhotoPair({
+  uri,
+  maskUri,
+  layerUris,
+  values,
+}: {
+  uri: string;
+  maskUri: string | null;
+  layerUris?: Partial<Record<SymptomKey, string | null>> | null;
+  values: Record<SymptomKey, number>;
+}) {
+  const layers = useMemo(() => {
+    const out: Partial<Record<SymptomKey, { uri: string }>> = {};
+    (Object.keys(layerUris ?? {}) as SymptomKey[]).forEach((k) => {
+      const u = layerUris?.[k];
+      if (u) out[k] = { uri: u };
+    });
+    return Object.keys(out).length ? out : null;
+  }, [layerUris]);
   return (
-    <View style={[monitoringCard(), styles.photoCard]}>
-      <View style={styles.photoRow}>
-        <View style={styles.photoCol}>
-          <Image source={{ uri }} style={styles.photo} />
-          <Text style={styles.photoCaption}>촬영 이미지 (원본)</Text>
-        </View>
-        <View style={styles.photoCol}>
-          <Image source={{ uri: maskUri ?? uri }} style={styles.photo} />
-          <Text style={styles.photoCaption}>{overlayCaption}</Text>
-        </View>
-      </View>
-    </View>
+    <SymptomLayerPhoto
+      photo={{ uri }}
+      overlay={maskUri ? { uri: maskUri } : null}
+      layers={layers}
+      values={values}
+      size={PHOTO_SIZE}
+    />
   );
 }
 
 /**
  * 부위별 증상 카드 — 병변이 여러 곳으로 떨어져 있어 판정 단위(regions)가 둘 이상일 때, 그 부위를
  * 하나씩 잘라 보여주며 4가지 증상 중 "있음/없음"만 알려준다. 등급(중증도)까지 보여주지 않는 건
- * 위 "4가지 증상" 카드가 이미 대표(가장 나쁜) 단위 하나로 등급을 보여주고 있어서, 여기서 부위마다
+ * 위 "증상 요약" 카드가 이미 대표(가장 나쁜) 단위 하나로 등급을 보여주고 있어서, 여기서 부위마다
  * 등급까지 늘어놓으면 정보가 겹쳐서 오히려 어디를 봐야 할지 헷갈리기 때문이다 — 여기서는 "이 부위는
  * 무슨 증상인지"만 훑고, 얼마나 심한지는 위 카드로 돌아가 보게 한다.
  */
@@ -379,26 +393,26 @@ function RegionSymptomRow({
         <Text style={styles.regionCropCaption}>부위 {index + 1}</Text>
       </View>
       <View style={styles.regionChips}>
-        {SIGN_ROWS.map((row, r) => (
-          <View key={r} style={styles.symptomChipRow}>
-            {row.map((sign) => {
+        <View style={styles.symptomChipRow}>
+          {SYMPTOM_GROUPS.map((group) => {
+            // 묶음에 속한 증상 중 하나라도 이 부위에서 나타났으면 "있음"
+            const present = group.members.some((m) => {
+              const sign = SIGN_ORDER.find((sg) => SIGN_DISPLAY[sg].recordKey === m)!;
               const found = region.signs.find((s) => s.sign === sign);
-              const present = !!found && found.grade > 0;
-              return (
-                <View key={sign} style={[styles.symptomChip, present && styles.symptomChipOn]}>
-                  <MaterialIcons
-                    name={present ? 'check-circle' : 'radio-button-unchecked'}
-                    size={13}
-                    color={present ? mc.greenDeep : mc.sub}
-                  />
-                  <Text style={[styles.symptomChipText, present && styles.symptomChipTextOn]}>
-                    {SIGN_DISPLAY[sign].label}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        ))}
+              return !!found && found.grade > 0;
+            });
+            return (
+              <View key={group.key} style={[styles.symptomChip, present && styles.symptomChipOn]}>
+                <MaterialIcons
+                  name={present ? 'check-circle' : 'radio-button-unchecked'}
+                  size={13}
+                  color={present ? mc.greenDeep : mc.sub}
+                />
+                <Text style={[styles.symptomChipText, present && styles.symptomChipTextOn]}>{group.label}</Text>
+              </View>
+            );
+          })}
+        </View>
       </View>
     </View>
   );

@@ -13,7 +13,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { SEVERITY_SUPPORTED_DISEASE } from '../ai/labels';
-import { ATOPIC_PHOTOS, ATOPIC_OVERLAYS, CHEEK_PHOTOS, CHEEK_OVERLAYS, TORSO_PHOTOS, TORSO_OVERLAYS } from './dumpPhotos';
+import { ATOPIC_PHOTOS, ATOPIC_OVERLAYS, CHEEK_PHOTOS, CHEEK_OVERLAYS, TORSO_PHOTOS, TORSO_OVERLAYS, FACE_PHOTOS, FACE_OVERLAYS, ARM_PHOTOS, ARM_OVERLAYS } from './dumpPhotos';
 import { DEMO_TARGETS, VISIBLE_DEMO_TARGET_IDS, folderNameOf } from './targets';
 
 /** 이 폴더의 진단명이 4가지 증상·IGA 모델이 커버하는 질환(아토피피부염)인지 — "피부 종합 상태"·
@@ -109,7 +109,7 @@ function splitAreaIntoRegions(areaIndex, iga, jitter) {
   }));
 }
 
-function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to, photos, overlays, photoStart = 0, demoMultiRegionOnLast, areaKind, dateOverrides }) {
+function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndices, from, to, photos, overlays, photoStart = 0, demoMultiRegionOnLast, areaKind, dateOverrides, lastOverride }) {
   const rng = makeRng(seedBase);
 
   // 0일차, 마지막 날은 반드시 포함 + 중간은 불규칙 간격으로 샘플링
@@ -117,7 +117,8 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to,
   while (offsets.size < captureCount) {
     offsets.add(Math.round(1 + rng() * (spanDays - 2)));
   }
-  const sorted = Array.from(offsets).sort((a, b) => a - b);
+  // 먼저 captureCount만큼 뽑아 난수열을 그대로 둔 채, 지정한 순번(시간순 0부터)의 촬영만 뺀다
+  const sorted = Array.from(offsets).sort((a, b) => a - b).filter((_, i) => !dropIndices?.includes(i));
 
   /*
     이 폴더가 사진 풀의 몇 번째부터 쓸지.
@@ -244,6 +245,11 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to,
     }
   }
 
+  // 가장 최근 기록 하나만 손으로 고친다 — 날짜는 오늘 기준으로 매번 달라져서 dateOverrides로는 못 짚는다
+  if (lastOverride && records.length) {
+    records[records.length - 1] = { ...records[records.length - 1], ...lastOverride };
+  }
+
   return records;
 }
 
@@ -254,7 +260,7 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to,
  *   여기서 곱한 상수를 화면이 그대로 나누므로 의도한 %가 왕복해서 그대로 돌아온다. 값이
  *   쓰이는 곳은 "얼굴의 12%" 같은 문구뿐이고, 그 카드는 지금 화면에서 내려가 있다.
  */
-function makeFolder({ id, targetId, name, disease, spanDaysAgoStart, spanDays, captureCount, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind = 'face', dateOverrides }) {
+function makeFolder({ id, targetId, name, disease, spanDaysAgoStart, spanDays, captureCount, dropIndices, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind = 'face', dateOverrides, lastOverride }) {
   const startDate = addDaysKey(todayKey(), -spanDaysAgoStart);
   const seedBase = hashStr(id + name);
   return {
@@ -264,7 +270,9 @@ function makeFolder({ id, targetId, name, disease, spanDaysAgoStart, spanDays, c
     disease,
     startDate,
     createdTs: Date.now(),
-    records: generateRecords(startDate, seedBase, { spanDays, captureCount, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind, dateOverrides }),
+    // 데모 부위의 면적 설문 결과(내부 점수 1~4) — 실제 폴더는 신규 기록의 설문에서 채워진다
+    areaScore: 1 + (seedBase % 4),
+    records: generateRecords(startDate, seedBase, { spanDays, captureCount, dropIndices, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind, dateOverrides, lastOverride }),
   };
 }
 
@@ -342,22 +350,44 @@ const DEMO_FOLDERS = [
     targetId: DEMO_TARGETS[3].id, // 얼굴 아토피피부염
     name: demoName(DEMO_TARGETS[3]),
     disease: DEMO_TARGETS[3].diagnosis?.disease,
-    spanDaysAgoStart: 18,
-    spanDays: 18,
-    captureCount: 6,
+    spanDaysAgoStart: 60,
+    spanDays: 60,
+    captureCount: 8,
     /*
-      나빠지는 사례. 최종 IGA 3 → "나쁨"(주황).
-
-      전신 지도는 아토피 폴더만 올리는데, 예전에는 다리·얼굴 둘 다 좋아지는 시계열이라 어느
-      시점을 골라도 두 점의 색이 거의 같았다 — 색 구분이 있는지조차 확인할 수 없었다. 지금은
-      다리(개선·파랑) · 몸통(유지·노랑) · 얼굴(악화·주황) 셋이 서로 다른 단계에 놓인다.
-      IGA 표시값이 100 − 등급×25라 등급 1과 2가 같은 "주의"에 묶이므로, 색을 갈라 두려면
-      최종 등급이 0 / 1~2 / 3 / 4처럼 **다른 구간**에 떨어져야 한다.
+      8번 뽑은 날짜 중 2번째(9/4)와 7번째(10/22)를 뺀다 → 기록 6개. 점 하나가 50px라 6개면 300px로
+      한 화면에 처음부터 끝까지 들어온다(8개는 400px라 가로 스크롤이 생겼다). 날짜가 기준일(오늘)에서
+      거꾸로 정해지므로 9/4·10/22는 10/26에 연 화면 기준이다.
     */
-    from: { sleep: 78, itch: 2, iga: 1.2 },
-    to: { sleep: 62, itch: 6, iga: 3.2 },
-    photos: CHEEK_PHOTOS,
-    overlays: CHEEK_OVERLAYS,
+    dropIndices: [1, 6],
+    /*
+      두 달(60일) 동안 8번 찍은 중 6번만 남긴, 꾸준히 좋아지는 사례. 시작 IGA 3.8 → "매우 나쁨"(빨강), 최종 IGA 1.4
+      → "주의"(노랑). 0으로 끝내지 않는 이유는 f3와 같다 — 마지막 사진에도 병변이 남아 있어서
+      세부 증상이 전부 "없음"이면 사진과 모순된다.
+
+      사진(FACE_PHOTOS)은 1장이라 모든 회차가 같은 사진을 쓴다 — 추이는 점수·증상 그래프로 본다.
+    */
+    from: { sleep: 52, itch: 8, iga: 3.8 },
+    to: { sleep: 77, itch: 3, iga: 1.4 },
+    photos: FACE_PHOTOS,
+    overlays: FACE_OVERLAYS,
+    // 최신 회차(상세 화면이 기본으로 여는 것)의 세부 증상: 피부 붉기 = 뚜렷함(등급 3 → 10), 오돌토돌함 = 미미함(등급 1 → 3.3)
+    lastOverride: { redness: 10, bumps: 3.3 },
+  }),
+  makeFolder({
+    id: 'f6',
+    targetId: DEMO_TARGETS[5].id, // 팔 아토피피부염
+    name: demoName(DEMO_TARGETS[5]),
+    disease: DEMO_TARGETS[5].diagnosis?.disease,
+    spanDaysAgoStart: 60,
+    spanDays: 60,
+    captureCount: 8,
+    // 얼굴 아토피(f4)와 같은 경과 — 2번째·7번째를 빼 6개로 한 화면에 들어오게 한다
+    dropIndices: [1, 6],
+    from: { sleep: 52, itch: 8, iga: 3.8 },
+    to: { sleep: 77, itch: 3, iga: 1.4 },
+    // 실사진 1장을 모든 회차에 재사용한다 — dumpPhotos.js 참고.
+    photos: ARM_PHOTOS,
+    overlays: ARM_OVERLAYS,
   }),
   makeFolder({
     id: 'f5',
@@ -418,6 +448,27 @@ export function getFolder(id) { return folders.find((f) => f.id === id) || null;
 export function useFolder(id) {
   useFolders(); // 변경 시 리렌더 트리거용 구독
   return getFolder(id);
+}
+
+/** 부위별 기준일 변경 — 경과 판정은 이 회차 대비로 다시 계산된다 (기본은 첫 촬영) */
+export function setFolderBaseline(folderId, recordId) {
+  folders = folders.map((f) => (f.id === folderId ? { ...f, baselineId: recordId } : f));
+  emit();
+}
+
+/** 면적 설문 결과(EASI 면적 점수 0~6) — 모니터링 시작 때 한 번 받는다 (folders/easi.ts) */
+export function setFolderAreaScore(folderId, score) {
+  folders = folders.map((f) => (f.id === folderId ? { ...f, areaScore: score } : f));
+  emit();
+}
+
+/**
+ * 등록 때 같은 부위를 여러 번 찍어 얻은 면적 지수들로 그 부위의 측정 오차를 정한다.
+ * SDC = 1.96 × √2 × SW 의 SW(개인 내 표준편차)를 상대값으로 저장 — areaTrend.sdcFromRepeats 참고.
+ */
+export function setFolderRepeatability(folderId, areaSigma) {
+  folders = folders.map((f) => (f.id === folderId ? { ...f, areaSigma } : f));
+  emit();
 }
 
 /** 한 모니터링 대상(MonitorTarget)에 딸린 폴더 */
@@ -520,12 +571,13 @@ function uniqueFolderName(name) {
  *           thickening: number, itchVas: number|null, areaPct: number,
  *           faceAreaIndex?: number|null, faceAreaKind?: 'face'|'torso'|null, lowRes?: boolean,
  *           areaRegions?: {index: number, iga: number}[]|null,
- *           photoUri?: string, maskUri?: string }} args
+ *           photoUri?: string, maskUri?: string,
+ *           symptomMaskUris?: Partial<Record<'redness'|'bumps'|'scratch'|'thickening', string|null>>|null }} args
  * @returns {{ record: any, hasSleepSource: boolean }|null}
  */
 export function recordExam({
   folderId, iga, redness, bumps, scratch, thickening, itchVas, areaPct,
-  faceAreaIndex = null, faceAreaKind = null, lowRes = false, areaRegions = null, photoUri, maskUri,
+  faceAreaIndex = null, faceAreaKind = null, lowRes = false, areaRegions = null, photoUri, maskUri, symptomMaskUris = null,
 }) {
   const folder = folders.find((f) => f.id === folderId);
   if (!folder) return null;
@@ -583,6 +635,14 @@ export function recordExam({
       화면(LesionThumb)이 그때만 예전의 윤곽선 도형으로 되돌아간다.
     */
     overlay: maskUri ? { uri: maskUri } : null,
+    /*
+      증상별(홍반·구진·찰상·태선화) 검출 영역을 따로 합성한 투명 이미지 — 결과·상세 화면의 증상 레이어
+      칩이 켜진 것만 사진 위에 겹쳐 그린다. 증상별 분할 모델이 붙기 전에는 없다(null) — 그때 화면은
+      overlay 하나로 전체 영역만 켜고 끈다. overlay와 마찬가지로 직전 기록에서 물려받지 않는다.
+    */
+    symptomOverlays: symptomMaskUris
+      ? Object.fromEntries(Object.entries(symptomMaskUris).filter(([, u]) => !!u).map(([k, u]) => [k, { uri: u }]))
+      : null,
   };
 
   /*

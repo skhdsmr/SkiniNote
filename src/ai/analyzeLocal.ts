@@ -86,6 +86,12 @@ export interface LocalAnalysisResult {
    */
   maskUri?: string | null;
   /**
+   * 증상별 마스크를 따로 합성한 투명 이미지 (data URI) — 홍반·구진·찰상·태선화를 사진 위에서 각각
+   * 켜고 끄는 레이어(SymptomLayerPhoto)가 쓴다. 증상별로 분할을 내는 모델을 붙이기 전에는 없다(undefined).
+   * 키는 기록 필드 이름(redness·bumps·scratch·thickening)이다.
+   */
+  symptomMaskUris?: Partial<Record<'redness' | 'bumps' | 'scratch' | 'thickening', string | null>> | null;
+  /**
    * 판정 단위별 결과 (넓은 순). 하나뿐이면 길이 1이다.
    * 최상위 signs/igaGrade는 이 중 가장 나쁜 단위의 값이다.
    */
@@ -434,7 +440,7 @@ async function analyzeImage(image: SkImage, opts: AnalyzeOptions): Promise<Local
 
   /*
     단위마다 넓이를 따로 잰다 — 전신 지도가 병변 하나에 원 하나를 그리고 그 크기를 각자의
-    넓이로 정하기 때문이다(WholeBodyResultScreen).
+    넓이로 정하기 때문이다(MonitoringMapScreen).
 
     전체 지수를 share로 쪼개는 방법도 있었지만 쓰지 않는다: share는 임계값을 넘긴 픽셀 수의
     비율인데 지수는 임계값 근처를 부분 가중으로 세므로(AREA_SOFT_HALF), 경계가 흐린 병변에서

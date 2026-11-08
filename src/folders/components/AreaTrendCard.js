@@ -34,8 +34,8 @@ const PAD_BOTTOM = 22;
 const PAD_LEFT = 34;
 const PAD_RIGHT = 12;
 
-export default function AreaTrendCard({ records, width, selectedId }) {
-  const series = areaTrendOf(records || []);
+export default function AreaTrendCard({ records, width, selectedId, measuredSw }) {
+  const series = areaTrendOf(records || [], measuredSw);
 
   // 잰 회차가 아예 없으면 카드를 비워 두지 않고 왜 없는지 말한다 —
   // 조용히 빈 자리를 두면 사용자는 기능이 고장 났다고 생각한다
@@ -86,7 +86,7 @@ export default function AreaTrendCard({ records, width, selectedId }) {
   }
 
   const isBase = selected.record.id === series.base.id;
-  const verdict = verdictOf(selected.delta, series.kind);
+  const verdict = verdictOf(selected.delta, series.kind, measuredSw);
 
   const chartW = Math.max(160, (width || 300) - 32);
   const plotW = chartW - PAD_LEFT - PAD_RIGHT;
@@ -133,7 +133,7 @@ export default function AreaTrendCard({ records, width, selectedId }) {
         그대로 보여 준다. 사용자가 "몇 %인지"를 물었을 때 앱이 숨길 이유는 없고, 대신 그 숫자를
         변화로 읽으면 안 된다는 것은 말로 알려 준다.
       */}
-      {!isBase && <Text style={styles.change}>{changePhrase(selected.delta, series.kind)}</Text>}
+      {!isBase && <Text style={styles.change}>{changePhrase(selected.delta, series.kind, measuredSw)}</Text>}
 
       {/*
         해상도가 낮았던 회차 표시. 값을 빼지 않고 남기는 대신, 추세가 이 점에서 튀었을 때

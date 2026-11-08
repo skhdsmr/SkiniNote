@@ -24,6 +24,16 @@ import { normalizeDateKey } from './memoStore';
 
 const STORAGE_KEY = 'records.itchDay.v1';
 
+/**
+ * 개발 실행(Expo)에서는 저장소를 쓰지 않는다 — 켤 때마다 문진 안 한 상태로 시작한다.
+ *
+ * 사진·기록은 세션 메모리라 다시 켜면 사라지는데(folders/store 머리말) 가려움만 남아 있으면,
+ * 기록이 하나도 없는데 "가려움증 문진하기"가 완료로 체크돼 있는 화면을 매번 보게 된다.
+ * 손으로 지울 방법도 없다. 실제 사용자에게는 직접 적은 값이 사라지면 안 되므로 릴리스 빌드는
+ * 그대로 남긴다 — 이 조건은 개발 실행에만 걸린다.
+ */
+const EPHEMERAL = __DEV__;
+
 /** 가려움 VAS의 최댓값 — 0(가렵지 않음) ~ 10(상상할 수 있는 최악) */
 export const MAX_VAS = 10;
 
@@ -50,6 +60,11 @@ export function subscribeItch(fn: () => void): () => void {
 // 앱이 뜰 때 한 번 읽어 온다. 읽기 전에 화면이 먼저 그려질 수 있으므로, 다 읽고 나서 알린다.
 (async () => {
   try {
+    if (EPHEMERAL) {
+      // 지난 실행에서 남은 값까지 지운다 — 안 지우면 릴리스로 한 번 켰을 때 되살아난다
+      await AsyncStorage.removeItem(STORAGE_KEY);
+      return;
+    }
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
@@ -95,7 +110,7 @@ export function setDayItch(dateKey: string, vas: number): void {
 
   if (changed) {
     byDate = { ...byDate, [date]: { vas: v, updatedAt: Date.now() } };
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(byDate)).catch(() => {});
+    if (!EPHEMERAL) AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(byDate)).catch(() => {});
   }
   applyDayItch(date, v);
   if (changed) emit();

@@ -7,15 +7,15 @@ import BottomNav from './BottomNav';
 import HomeScreen from '../screens/HomeScreen';
 import RecordsScreen from '../screens/RecordsScreen';
 import CameraScreen from '../screens/CameraScreen';
-import MonitoringMapScreen from '../screens/MonitoringMapScreen';
-import TriggerDetectiveScreen from '../insights/TriggerDetectiveScreen';
-import ScratchReportScreen from '../insights/ScratchReportScreen';
-import RecoveryTrackerScreen from '../insights/RecoveryTrackerScreen';
+import WholeBodyResultScreen from '../screens/WholeBodyResultScreen';
 import DataExportScreen from '../screens/DataExportScreen';
 import RoutineScreen from '../screens/RoutineScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import MonitoringScreen from '../folders/screens/MonitoringScreen';
 import MonitoringFolderScreen from '../folders/screens/MonitoringFolderScreen';
 import MonitoringDetailScreen from '../folders/screens/MonitoringDetailScreen';
+import AtopyHistoryScreen from '../screens/AtopyHistoryScreen';
+import BarrierHistoryScreen from '../screens/BarrierHistoryScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -38,7 +38,7 @@ const ProfileWrapped = withTopInset(ProfileScreen);
 
 /**
  * 하단 바가 붙어 있는 5개 탭 — 앱의 기본 화면.
- * 홈 · 피부 촬영 · 기록 · 루틴 · 내 정보. 경과 관찰(전신 지도)은 기록 탭 안에서 스택 화면으로 열린다.
+ * 홈 · 피부 촬영 · 기록 · 루틴 · 내 정보. 전신 결과는 기록 탭 안에서 스택 화면으로 열린다.
  */
 function Tabs() {
   return (
@@ -59,10 +59,10 @@ function Tabs() {
 }
 
 /**
- * 탭 위에 스택을 한 겹 얹는다 — 경과 관찰 화면들과 증상별 특화 화면이 여기
- * 올라탄다. 탭 화면 안에서 navigate('Monitoring') 같이 탭에 없는 이름을 부르면 이 부모 스택으로
- * 올라와 처리된다(navigate('Camera')처럼 탭 안에 있는 이름은 그대로 탭에서 해결되므로 기존
- * 코드에 영향이 없다).
+ * 탭 위에 스택을 한 겹 얹는다 — 경과 관찰 화면 3종과 기록 탭에서 열리는 전신 결과가 여기
+ * 올라탄다. 탭 화면 안에서 navigate('WholeBody') 같이 탭에 없는 이름을 부르면 이 부모 스택으로
+ * 올라와 처리된다(navigate('Records')처럼 탭 안에 있는 이름은 그대로 탭에서 해결되므로 기존
+ * 코드에 영향이 없다). 아토피 기록·장벽 기록도 여기 올라탄다.
  */
 export default function RootNavigator() {
   return (
@@ -70,15 +70,16 @@ export default function RootNavigator() {
       screenOptions={{ headerShown: false, contentStyle: { backgroundColor: AppColors.bg } }}
     >
       <Stack.Screen name="Tabs" component={Tabs} />
-      {/* 경과 관찰 — 지켜보는 자리를 몸 그림으로 보여주고, 자리를 눌러 그 자리의 기록으로 들어간다.
-          자체 상단 바(TopBar)를 그리므로 네이티브 헤더는 끈다(headerShown: false 규칙). */}
-      <Stack.Screen name="Monitoring" component={MonitoringMapScreen} />
+      {/* 아토피 기록(IGA 변화 목록) → 아토피 결과 상세(MonitoringDetail) */}
+      <Stack.Screen name="AtopyHistory" component={AtopyHistoryScreen} />
+      {/* 장벽 기록(점수 추이 그래프) → 피부장벽 결과 상세(MonitoringDetail이 장벽 폴더면 SkinScanResultPage) */}
+      <Stack.Screen name="BarrierHistory" component={BarrierHistoryScreen} />
+      <Stack.Screen name="Monitoring" component={MonitoringScreen} />
       <Stack.Screen name="MonitoringFolder" component={MonitoringFolderScreen} />
       <Stack.Screen name="MonitoringDetail" component={MonitoringDetailScreen} />
-      {/* 증상 묶음별 특화 화면 — 모두 { folderId }를 받는다 */}
-      <Stack.Screen name="TriggerDetective" component={TriggerDetectiveScreen} />
-      <Stack.Screen name="ScratchReport" component={ScratchReportScreen} />
-      <Stack.Screen name="RecoveryTracker" component={RecoveryTrackerScreen} />
+      {/* WholeBody는 다른 화면들과 같은 자체 상단 바(TopBar)를 그리므로 네이티브 헤더는 끈다 —
+          MonitoringFolder 등과 같은 headerShown: false 규칙을 따른다. */}
+      <Stack.Screen name="WholeBody" component={WholeBodyResultScreen} />
       <Stack.Screen
         name="DataExport"
         component={DataExportScreen}

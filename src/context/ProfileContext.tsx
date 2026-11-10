@@ -42,7 +42,7 @@ const ProfileContext = createContext<ProfileContextValue | null>(null);
 
 export function ProfileProvider({ children }: { children: React.ReactNode }) {
   const [name, setNameState] = useState(kUserName);
-  const [body, setBodyState] = useState<BodyInfo>({ height: 174, weight: 68, age: 32, sex: 'male' });
+  const [body, setBodyState] = useState<BodyInfo>({ height: 174, weight: 68, age: 25, sex: 'male' });
   const [healthConnected, setHealthConnected] = useState(true);
   const [pushEnabled, setPushEnabled] = useState(true);
 

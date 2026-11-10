@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppColors, cardDecoration } from '../theme';
 import { useFolders } from '../folders/store';
 import { DISPLAY_SCALE, ITCH_SEGMENTS, segmentFor } from '../folders/theme';
 import ItchVasSlider from '../components/ItchVasSlider';
+
+const ITCH_ICON = require('../../assets/icon/itch_icon_white.png');
 import { normalizeDateKey } from './memoStore';
 import { MAX_VAS, setDayItch, useDayItch } from './itchStore';
 
@@ -77,10 +79,11 @@ export default function DayItchCard({
     <View style={[cardDecoration(16), styles.card, saved == null && styles.cardEmpty]}>
       <Pressable style={styles.headerRow} onPress={toggle}>
         <View style={[styles.icon, saved == null && styles.iconEmpty]}>
-          <MaterialIcons
-            name="healing"
-            size={20}
-            color={saved == null ? '#16320A' : AppColors.greenMuted}
+          {/* 가려움 안정도 아이콘(경과 관찰·홈 요약칸과 같은 그림) — 흰 선화라 예전 아이콘 색으로 물들인다 */}
+          <Image
+            source={ITCH_ICON}
+            style={{ width: 24, height: 24, tintColor: saved == null ? '#16320A' : AppColors.greenMuted }}
+            resizeMode="contain"
           />
         </View>
         <View style={{ flex: 1 }}>

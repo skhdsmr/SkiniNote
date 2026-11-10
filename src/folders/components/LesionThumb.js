@@ -13,7 +13,7 @@ import React from 'react';
 import { View, Image } from 'react-native';
 import { monitoringColors as mc } from '../theme';
 
-export default function LesionThumb({ photo, overlay = null, mode = 'photo', size = 64, style = undefined }) {
+export default function LesionThumb({ photo, overlay = null, mode = 'photo', size = 64, style }) {
   const source = (mode === 'overlay' && overlay) || photo;
   return (
     <View style={[{ width: size, height: size, borderRadius: 10, overflow: 'hidden', backgroundColor: mc.bg }, style]}>

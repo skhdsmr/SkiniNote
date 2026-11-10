@@ -2,7 +2,7 @@
  * 모니터링 폴더 저장소 (세션 메모리 + 구독).
  *
  * 폴더 하나 = 모니터링 대상(MonitorTarget) 하나. 폴더 안에는 촬영 날짜별 기록
- * (수면 점수 · 가려움 VAS · 피부 종합 상태 IGA)이 쌓인다.
+ * (수면 점수 · 가려움 VAS · 피부 질환 IGA)이 쌓인다.
  *
  * 폴더는 사용자가 직접 만들지 않는다 — 카메라 탭의 "신규 검사"(부위 선택 → 촬영 방법 →
  * 촬영 → 결과)를 끝낸 뒤 결과 화면에서 "경과 기록에 연동"을 누르면
@@ -13,10 +13,10 @@
  */
 import { useSyncExternalStore } from 'react';
 import { SEVERITY_SUPPORTED_DISEASE } from '../ai/labels';
-import { ATOPIC_PHOTOS, ATOPIC_OVERLAYS, CHEEK_PHOTOS, CHEEK_OVERLAYS, TORSO_PHOTOS, TORSO_OVERLAYS, FACE_PHOTOS, FACE_OVERLAYS, ARM_PHOTOS, ARM_OVERLAYS } from './dumpPhotos';
+import { ATOPIC_PHOTOS, ATOPIC_OVERLAYS, CHEEK_PHOTOS, CHEEK_OVERLAYS, TORSO_PHOTOS, TORSO_OVERLAYS, FACE_PHOTO } from './dumpPhotos';
 import { DEMO_TARGETS, VISIBLE_DEMO_TARGET_IDS, folderNameOf } from './targets';
 
-/** 이 폴더의 진단명이 4가지 증상·IGA 모델이 커버하는 질환(아토피피부염)인지 — "피부 종합 상태"·
+/** 이 폴더의 진단명이 4가지 증상·IGA 모델이 커버하는 질환(아토피피부염)인지 — "피부 질환"·
  *  "4가지 증상" 카드를 보여줄지 모니터링 화면들이 이 값으로 정한다. */
 export function folderHasSeverity(folder) {
   return folder?.disease === SEVERITY_SUPPORTED_DISEASE;
@@ -71,7 +71,7 @@ export function makeRng(seed) {
 
 /**
  * 촬영 시작일부터 spanDays 동안 captureCount번 촬영했다고 가정하고
- * 3개 지표(수면 점수 · 가려움 VAS · 피부 종합 상태 IGA)의 dump 시계열을 생성한다.
+ * 3개 지표(수면 점수 · 가려움 VAS · 피부 질환 IGA)의 dump 시계열을 생성한다.
  * 실제 사용자는 매일 촬영하지 않으므로 날짜 간격을 일부러 들쭉날쭉하게 만든다.
  *
  * from -> to로 밋밋하게 한쪽으로만 줄어들면 비현실적이라, 물결(wave) 성분을 얹어
@@ -109,7 +109,92 @@ function splitAreaIntoRegions(areaIndex, iga, jitter) {
   }));
 }
 
-function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndices, from, to, photos, overlays, photoStart = 0, demoMultiRegionOnLast, areaKind, dateOverrides, lastOverride }) {
+/*
+  피부상태측정(얼굴 스캔) dump 결과 — 서버(피부상태_파이프라인/serve_skin.py)의 /analyze 응답과
+  같은 구조(metrics · items · ageNorm · levelEdges)라 SkinScanScreen의 결과 컴포넌트를 그대로 쓴다.
+
+  ⚠️ 전부 지어낸 값이다. 수분 평균·SD는 moisture_ref_train.json에서 대략 잡은 값이고, 연령대는
+  20대로 고정했다. 실제 스캔 결과를 폴더 기록에 저장하는 경로는 아직 없다.
+*/
+const DUMP_SCAN_AGE_GROUP = '20대';
+const MOISTURE_ALL = { mean: 61.6, sd: 8.5 }; // 전체 기준 — 레벨 경계는 이 값으로 정한다(서버와 같은 규칙)
+const MOISTURE_AGE = { group: DUMP_SCAN_AGE_GROUP, n: 160, mean: 62.8, sd: 9.0 };
+const MOISTURE_EDGES = [-1.25, -0.75, -0.25, 0.25, 0.75, 1.25].map((k) => round1(MOISTURE_ALL.mean + k * MOISTURE_ALL.sd));
+const LEVEL_MAX = 7;
+const scanBand = (score) => (score >= 80 ? ['good', '좋음'] : score >= 60 ? ['normal', '보통'] : score >= 40 ? ['caution', '주의'] : ['care', '관리 필요']);
+const scoreToLevel = (score) => clamp(Math.round(1 + (score / 100) * 6), 1, LEVEL_MAX);
+
+/*
+  데모 얼굴 사진(FACE_PHOTO, 480×480)의 측정 부위 — 피부장벽 서버(serve_skin.py /analyze)에 그 사진을
+  한 번 실제로 보내 받은 MediaPipe crop 박스·얼굴 윤곽을 그대로 옮겨 둔 값이다. 이게 있어야 기록의
+  결과 상세가 바로 스캔 결과처럼 "측정 부위" 박스를 사진 위에 그린다(없으면 사진만 나온다).
+*/
+const DUMP_FACE_GEOMETRY = {
+  width: 480,
+  height: 480,
+  face: [63, 73, 423, 495],
+  boxes: [
+    { part: 'forehead', label: '이마', box: [130, 0, 340, 210] },
+    { part: 'glabella', label: '미간', box: [203, 118, 274, 189] },
+    { part: 'l_perocular', label: '왼쪽 눈가', box: [54, 186, 111, 242] },
+    { part: 'r_perocular', label: '오른쪽 눈가', box: [373, 179, 429, 236] },
+    { part: 'l_cheek', label: '왼쪽 볼', box: [76, 233, 205, 361] },
+    { part: 'r_cheek', label: '오른쪽 볼', box: [280, 230, 407, 357] },
+    { part: 'chin', label: '턱', box: [108, 207, 381, 480] },
+  ],
+};
+
+/** total: 종합 점수(0~100), jitter(phase): 지표마다 다르게 흔드는 값 */
+function makeDumpSkinScan(total, jitter) {
+  const t = Math.round(total);
+  const score = (phase, bias) => clamp(Math.round(t + bias + jitter(phase)), 0, 100);
+  const levelItem = (key, label, s, ageAvgLevel) => ({ key, label, parts: [], level: scoreToLevel(s), levelMax: LEVEL_MAX, ageAvgLevel });
+  const metric = (key, label, s, extra) => ({ key, label, score: s, band: scanBand(s)[0], bandLabel: scanBand(s)[1], ageAvgScore: null, parts: [], ...extra });
+
+  const wFore = score(9.1, 4);
+  const wEye = score(9.7, 1);
+  const pore = score(10.4, -3);
+  const moistScore = score(11.7, -1);
+  // 수분 점수(0~100)를 실측 단위로 되돌린다 — 60점 ≈ 전체 평균, 20점마다 약 1SD
+  const moistValue = round1(clamp(MOISTURE_ALL.mean + ((moistScore - 60) / 20) * MOISTURE_ALL.sd, 32, 94));
+  const moistLevel = 1 + MOISTURE_EDGES.filter((e) => moistValue >= e).length;
+
+  return {
+    ...DUMP_FACE_GEOMETRY,
+    total: t, // 경과 그래프 아래 그라데이션 띠가 쓰는 값
+    photo: FACE_PHOTO, // 피부장벽진단 때 찍은 얼굴 사진 — 경과 관찰 촬영 이미지 칸 맨 왼쪽
+    totalScore: t,
+    totalBand: scanBand(t)[0],
+    totalBandLabel: scanBand(t)[1],
+    ageGroup: DUMP_SCAN_AGE_GROUP,
+    /*
+      항목별 또래 비교(z) — 결과 화면 총점 옆 멘트("○○이 또래 평균보다 낮아요")가 쓴다.
+      서버는 연령대 평균·SD로 계산하지만 덤프에는 원자료가 없어서, 레벨은 연령대 평균 레벨과의
+      차이를 대략 1.5레벨 = 1SD로, 수분량은 연령대 평균·SD로 잡는다.
+    */
+    totalItems: [
+      { key: 'forehead_glabella', label: '이마·미간 주름', z: Math.round(((scoreToLevel(wFore) - 5.1) / 1.5) * 100) / 100 },
+      { key: 'perocular', label: '눈가 주름', z: Math.round(((scoreToLevel(wEye) - 4.6) / 1.5) * 100) / 100 },
+      { key: 'cheek', label: '볼 모공', z: Math.round(((scoreToLevel(pore) - 4.2) / 1.5) * 100) / 100 },
+      { key: 'moisture', label: '수분량', z: Math.round(((moistValue - MOISTURE_AGE.mean) / MOISTURE_AGE.sd) * 100) / 100 },
+    ],
+    metrics: [
+      metric('wrinkle', '주름', Math.round((wFore + wEye) / 2), {
+        value: 0,
+        items: [levelItem('forehead_glabella', '이마·미간', wFore, 5.1), levelItem('perocular', '눈가', wEye, 4.6)],
+      }),
+      metric('pore', '모공', pore, { value: 0, items: [levelItem('cheek', '볼', pore, 4.2)] }),
+      metric('moisture', '수분량', moistScore, {
+        value: moistValue,
+        ageNorm: { ...MOISTURE_AGE, lo: MOISTURE_AGE.mean - 0.25 * MOISTURE_AGE.sd, hi: MOISTURE_AGE.mean + 0.25 * MOISTURE_AGE.sd },
+        levelEdges: MOISTURE_EDGES,
+        items: [{ key: 'moisture', label: '수분량', parts: [], level: moistLevel, levelMax: LEVEL_MAX, ageAvgLevel: 4.1 }],
+      }),
+    ],
+  };
+}
+
+function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to, photos, overlays, photoStart = 0, demoMultiRegionOnLast, areaKind, dateOverrides }) {
   const rng = makeRng(seedBase);
 
   // 0일차, 마지막 날은 반드시 포함 + 중간은 불규칙 간격으로 샘플링
@@ -117,8 +202,7 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndic
   while (offsets.size < captureCount) {
     offsets.add(Math.round(1 + rng() * (spanDays - 2)));
   }
-  // 먼저 captureCount만큼 뽑아 난수열을 그대로 둔 채, 지정한 순번(시간순 0부터)의 촬영만 뺀다
-  const sorted = Array.from(offsets).sort((a, b) => a - b).filter((_, i) => !dropIndices?.includes(i));
+  const sorted = Array.from(offsets).sort((a, b) => a - b);
 
   /*
     이 폴더가 사진 풀의 몇 번째부터 쓸지.
@@ -146,7 +230,7 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndic
     // 수면 점수(삼성헬스, 0~100, 정수) · 가려움 VAS(0~10, 정수) — 둘 다 그대로 나올 수 있는 값이다.
     const sleepScore = clamp(Math.round(lerp(from.sleep, to.sleep, t) + wave(0) * sleepSpan * 0.4 + noise() * sleepSpan * 0.14), 0, 100);
     const itchVas = clamp(Math.round(lerp(from.itch, to.itch, t) + wave(1.3) * itchSpan * 0.4 + noise() * itchSpan * 0.14), 0, 10);
-    // 피부 종합 상태(IGA) — 모델은 5단계(0~4) 확률의 기댓값을 계산해서 쓰지만, 화면·기록에 실제로
+    // 피부 질환(IGA) — 모델은 5단계(0~4) 확률의 기댓값을 계산해서 쓰지만, 화면·기록에 실제로
     // 남는 값(igaGrade)은 그 기댓값을 등급 경계로 이산화한 정수다(src/ai/dex.ts의 bucketize) —
     // 1.7 같은 소수는 실제로는 절대 나오지 않으므로, dump도 정수 등급만 뽑는다.
     const igaContinuous = clamp(lerp(from.iga, to.iga, t) + wave(2.6) * igaSpan * 0.4 + noise() * igaSpan * 0.14, 0, 4);
@@ -227,6 +311,20 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndic
         가리키게 되고, 그건 지어낸 도형을 그리던 예전과 다를 바가 없다.
       */
       overlay: overlays ? overlays[photoAt(i)] : null,
+      /*
+        피부상태측정(얼굴 스캔 — src/skinScan) 결과. 실제 총점과 같은 50~100 범위, 높을수록 좋다.
+        IGA가 나쁠수록 낮게 나오도록 대략 따라가되(IGA 0 → 약 98, 4 → 약 54) 물결을 크게 얹어
+        한 폴더 안에서도 낮은 값부터 높은 값까지 고루 나오게 한다 — 띠 색이 한쪽으로 몰리지 않게.
+        ⚠️ 지어낸 dump 값이다 — 실제 스캔 결과를 기록에 저장하는 경로는 아직 없다.
+
+        [분리판] 아토피 기록에는 피부장벽 값을 붙이지 않는다(피부장벽은 피부 장벽 폴더에만 쌓인다).
+        다만 호출은 그대로 둔다 — 안에서 쓰는 noise()가 난수를 소비해서, 빼면 뒤 회차의 데모 값
+        (IGA·증상)이 통합판과 달라진다. 값만 버린다.
+      */
+      skinScan: (makeDumpSkinScan(
+        clamp(lerp(98, 54, igaContinuous / 4) + symptomWave(8.3) * 12 + noise() * 6, 50, 100),
+        (phase) => symptomWave(phase) * 7 + noise() * 6,
+      ), null),
       // 가장 최근 기록(오늘, offset === spanDays)에만 "병변 여러 곳" 예시를 붙인다 — 매 회차마다
       // 붙이면 정말 그렇게 찍힌 것처럼 보이고, 미리보기는 한 장이면 충분하다.
       ...(demoMultiRegionOnLast && offset === spanDays ? { regions: DEMO_REGIONS } : null),
@@ -245,11 +343,6 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndic
     }
   }
 
-  // 가장 최근 기록 하나만 손으로 고친다 — 날짜는 오늘 기준으로 매번 달라져서 dateOverrides로는 못 짚는다
-  if (lastOverride && records.length) {
-    records[records.length - 1] = { ...records[records.length - 1], ...lastOverride };
-  }
-
   return records;
 }
 
@@ -260,7 +353,7 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, dropIndic
  *   여기서 곱한 상수를 화면이 그대로 나누므로 의도한 %가 왕복해서 그대로 돌아온다. 값이
  *   쓰이는 곳은 "얼굴의 12%" 같은 문구뿐이고, 그 카드는 지금 화면에서 내려가 있다.
  */
-function makeFolder({ id, targetId, name, disease, spanDaysAgoStart, spanDays, captureCount, dropIndices, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind = 'face', dateOverrides, lastOverride }) {
+function makeFolder({ id, targetId, name, disease, spanDaysAgoStart, spanDays, captureCount, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind = 'face', dateOverrides }) {
   const startDate = addDaysKey(todayKey(), -spanDaysAgoStart);
   const seedBase = hashStr(id + name);
   return {
@@ -270,7 +363,7 @@ function makeFolder({ id, targetId, name, disease, spanDaysAgoStart, spanDays, c
     disease,
     startDate,
     createdTs: Date.now(),
-    records: generateRecords(startDate, seedBase, { spanDays, captureCount, dropIndices, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind, dateOverrides, lastOverride }),
+    records: generateRecords(startDate, seedBase, { spanDays, captureCount, from, to, photos, overlays, photoStart, demoMultiRegionOnLast, areaKind, dateOverrides }),
   };
 }
 
@@ -348,44 +441,22 @@ const DEMO_FOLDERS = [
     targetId: DEMO_TARGETS[3].id, // 얼굴 아토피피부염
     name: demoName(DEMO_TARGETS[3]),
     disease: DEMO_TARGETS[3].diagnosis?.disease,
-    spanDaysAgoStart: 60,
-    spanDays: 60,
-    captureCount: 8,
+    spanDaysAgoStart: 18,
+    spanDays: 18,
+    captureCount: 6,
     /*
-      8번 뽑은 날짜 중 2번째(9/4)와 7번째(10/22)를 뺀다 → 기록 6개. 점 하나가 50px라 6개면 300px로
-      한 화면에 처음부터 끝까지 들어온다(8개는 400px라 가로 스크롤이 생겼다). 날짜가 기준일(오늘)에서
-      거꾸로 정해지므로 9/4·10/22는 10/26에 연 화면 기준이다.
-    */
-    dropIndices: [1, 6],
-    /*
-      두 달(60일) 동안 8번 찍은 중 6번만 남긴, 꾸준히 좋아지는 사례. 시작 IGA 3.8 → "매우 나쁨"(빨강), 최종 IGA 1.4
-      → "주의"(노랑). 0으로 끝내지 않는 이유는 f3와 같다 — 마지막 사진에도 병변이 남아 있어서
-      세부 증상이 전부 "없음"이면 사진과 모순된다.
+      나빠지는 사례. 최종 IGA 3 → "나쁨"(주황).
 
-      사진(FACE_PHOTOS)은 1장이라 모든 회차가 같은 사진을 쓴다 — 추이는 점수·증상 그래프로 본다.
+      전신 지도는 아토피 폴더만 올리는데, 예전에는 다리·얼굴 둘 다 좋아지는 시계열이라 어느
+      시점을 골라도 두 점의 색이 거의 같았다 — 색 구분이 있는지조차 확인할 수 없었다. 지금은
+      다리(개선·파랑) · 몸통(유지·노랑) · 얼굴(악화·주황) 셋이 서로 다른 단계에 놓인다.
+      IGA 표시값이 100 − 등급×25라 등급 1과 2가 같은 "주의"에 묶이므로, 색을 갈라 두려면
+      최종 등급이 0 / 1~2 / 3 / 4처럼 **다른 구간**에 떨어져야 한다.
     */
-    from: { sleep: 52, itch: 8, iga: 3.8 },
-    to: { sleep: 77, itch: 3, iga: 1.4 },
-    photos: FACE_PHOTOS,
-    overlays: FACE_OVERLAYS,
-    // 최신 회차(상세 화면이 기본으로 여는 것)의 세부 증상: 피부 붉기 = 뚜렷함(등급 3 → 10), 오돌토돌함 = 미미함(등급 1 → 3.3)
-    lastOverride: { redness: 10, bumps: 3.3 },
-  }),
-  makeFolder({
-    id: 'f6',
-    targetId: DEMO_TARGETS[5].id, // 팔 아토피피부염
-    name: demoName(DEMO_TARGETS[5]),
-    disease: DEMO_TARGETS[5].diagnosis?.disease,
-    spanDaysAgoStart: 60,
-    spanDays: 60,
-    captureCount: 8,
-    // 얼굴 아토피(f4)와 같은 경과 — 2번째·7번째를 빼 6개로 한 화면에 들어오게 한다
-    dropIndices: [1, 6],
-    from: { sleep: 52, itch: 8, iga: 3.8 },
-    to: { sleep: 77, itch: 3, iga: 1.4 },
-    // 실사진 1장을 모든 회차에 재사용한다 — dumpPhotos.js 참고.
-    photos: ARM_PHOTOS,
-    overlays: ARM_OVERLAYS,
+    from: { sleep: 78, itch: 2, iga: 1.2 },
+    to: { sleep: 62, itch: 6, iga: 3.2 },
+    photos: CHEEK_PHOTOS,
+    overlays: CHEEK_OVERLAYS,
   }),
   makeFolder({
     id: 'f5',
@@ -407,7 +478,7 @@ const DEMO_FOLDERS = [
     photos: TORSO_PHOTOS,
     overlays: TORSO_OVERLAYS,
     /*
-      8/5 회차 손보정: 공식대로면 이날 피부 종합 상태(iga)가 전날보다 나빠지는데, 그러면 안
+      8/5 회차 손보정: 공식대로면 이날 피부 질환(iga)가 전날보다 나빠지는데, 그러면 안
       되고 전날과 같은 값으로 "유지"돼야 한다. 수면 점수·가려움(VAS)도 전날보다 좋아지는
       쪽으로 튼다 — 가려움은 VAS가 낮을수록 표시 점수(가려움 안정도)가 올라간다.
     */
@@ -429,12 +500,109 @@ const DEMO_FOLDERS = [
   }),
 ];
 
+/*
+  ── 피부 장벽 폴더 ───────────────────────────────────────────────────
+  피부 장벽만 잰 기록을 모으는 폴더(kind: 'barrier'). 얼굴 전체를 재는 측정이라 자리가 하나뿐이어서
+  폴더도 하나만 둔다 — 신규 증상 기록에서 피부 질환을 넘어가고 피부 장벽만 재면 여기에 쌓인다.
+
+  기록에는 피부 질환 값(iga·증상·넓이)이 없다(null). 경과 페이지는 이 폴더를 피부 장벽 전용
+  화면(BarrierFolderScreen)으로 보여주고, 홈의 "최근 피부 상태"는 이 폴더를 건너뛴다.
+*/
+export const BARRIER_FOLDER_NAME = '피부 장벽';
+/** 피부 장벽 측정 촬영 대상 id — SkinScanScreen의 FACE_SCAN_TARGET과 같은 값 */
+export const BARRIER_TARGET_ID = 'tgt_skin_barrier_scan';
+export const isBarrierFolder = (folder) => folder?.kind === 'barrier';
+
+/** 피부 장벽만 잰 기록 한 줄 — 피부 질환 값은 비워 둔다 */
+function barrierRecord({ folderId, date, dayOffset, ts, sleepScore, itchVas, skinScan }) {
+  /** @type {any} — 피부 질환 값이 비어 있어 일반 기록과 모양이 달라, 타입 추론에서 섞이지 않게 둔다 */
+  const record = {
+    id: `${folderId}-${date}-${ts}`,
+    seed: hashStr(`${folderId}-${date}-${ts}`),
+    date,
+    dayOffset,
+    ts,
+    sleepScore,
+    itchVas,
+    iga: null,
+    redness: null,
+    bumps: null,
+    scratch: null,
+    thickening: null,
+    lesionAreaPct: null,
+    lesionAreaFaceIndex: null,
+    lesionAreaScaleKind: null,
+    lesionAreaRegions: null,
+    lesionAreaLowRes: false,
+    // 목록·기록 탭 썸네일은 그날 찍은 얼굴 사진
+    photo: skinScan?.photo ?? null,
+    overlay: null,
+    skinScan,
+  };
+  return record;
+}
+
+/**
+ * 피부 장벽 덤프 폴더 — 점수가 from → to로 대략 오르며 출렁인다(⚠️ 지어낸 값).
+ * 얼굴 사진은 dumpPhotos의 FACE_PHOTO 한 장을 모든 회차가 같이 쓴다.
+ */
+function makeBarrierFolder({ id, spanDays, stepDays, from, to }) {
+  const startDate = addDaysKey(todayKey(), -spanDays);
+  const rng = makeRng(hashStr(`${id}:barrier`));
+  /*
+    대략 stepDays마다 한 번(±1일) 잰다 — 무작위로 흩으면 한 주가 통째로 비어 전신 결과 그래프의 선이
+    끊겼다. 간격이 6일을 넘지 않으므로 어느 주(7일)에도 최소 한 번은 기록이 있다. 첫날·오늘은 항상 잰다.
+  */
+  const offsets = new Set([0, spanDays]);
+  for (let d = stepDays; d < spanDays - 1; d += stepDays) {
+    offsets.add(clamp(d + Math.round((rng() - 0.5) * 2), 1, spanDays - 1));
+  }
+  const sorted = [...offsets].sort((a, b) => a - b);
+  const phase = rng() * Math.PI * 2;
+  const now = Date.now();
+  const records = sorted.map((offset, i) => {
+    const t = sorted.length > 1 ? i / (sorted.length - 1) : 1;
+    const envelope = Math.sin(t * Math.PI); // 첫·마지막 회차는 from/to 그대로
+    const wave = (k) => Math.sin(t * Math.PI * 3.1 + phase + k) * envelope;
+    const noise = () => rng() - 0.5;
+    const total = clamp(lerp(from, to, t) + wave(0) * 9 + noise() * 4, 50, 100);
+    const scan = makeDumpSkinScan(total, (k) => wave(k) * 6 + noise() * 5);
+    return barrierRecord({
+      folderId: id,
+      date: addDaysKey(startDate, offset),
+      dayOffset: offset,
+      ts: now - (spanDays - offset) * 86400000,
+      sleepScore: clamp(Math.round(lerp(68, 80, t) + wave(1.7) * 6 + noise() * 4), 0, 100),
+      itchVas: clamp(Math.round(lerp(4, 2, t) + wave(2.9) * 1.5 + noise()), 0, 10),
+      skinScan: scan,
+    });
+  });
+  /** @type {any} */
+  const folder = { id, kind: 'barrier', targetId: BARRIER_TARGET_ID, name: BARRIER_FOLDER_NAME, disease: undefined, startDate, createdTs: now, records };
+  return folder;
+}
+
+/*
+  피부 장벽 데모 기록은 화면에 오른 다른 데모 폴더의 **가장 오래된 기록부터 오늘까지** 이어지게 만든다 —
+  전신 결과 그래프(가려움·수면·피부 장벽)가 같은 기간을 처음부터 끝까지 나란히 그리도록.
+*/
+const DEMO_SPAN_DAYS = Math.max(
+  0,
+  ...DEMO_FOLDERS.filter((f) => VISIBLE_DEMO_TARGET_IDS.includes(f.targetId)).map((f) =>
+    f.records.length ? daysBetween(f.records[0].date, todayKey()) : 0,
+  ),
+);
+const DEMO_BARRIER_FOLDER = makeBarrierFolder({ id: 'fb1', spanDays: DEMO_SPAN_DAYS || 24, stepDays: 4, from: 62, to: 90 });
+
 /** 화면에 실제로 오르는 데모 폴더 — 목록에 없는 자리는 만들어만 두고 쓰지 않는다 */
-let folders = VISIBLE_DEMO_TARGET_IDS.flatMap((id) => {
-  // 목록에 없는 id가 적혀 있어도 앱은 그 폴더만 빠진 채 그대로 돈다
-  const folder = DEMO_FOLDERS.find((f) => f.targetId === id);
-  return folder ? [folder] : [];
-});
+let folders = [
+  ...VISIBLE_DEMO_TARGET_IDS.flatMap((id) => {
+    // 목록에 없는 id가 적혀 있어도 앱은 그 폴더만 빠진 채 그대로 돈다
+    const folder = DEMO_FOLDERS.find((f) => f.targetId === id);
+    return folder ? [folder] : [];
+  }),
+  DEMO_BARRIER_FOLDER,
+];
 
 const listeners = new Set();
 function emit() { listeners.forEach((l) => l()); }
@@ -446,12 +614,6 @@ export function getFolder(id) { return folders.find((f) => f.id === id) || null;
 export function useFolder(id) {
   useFolders(); // 변경 시 리렌더 트리거용 구독
   return getFolder(id);
-}
-
-/** 부위별 기준일 변경 — 경과 판정은 이 회차 대비로 다시 계산된다 (기본은 첫 촬영) */
-export function setFolderBaseline(folderId, recordId) {
-  folders = folders.map((f) => (f.id === folderId ? { ...f, baselineId: recordId } : f));
-  emit();
 }
 
 /** 한 모니터링 대상(MonitorTarget)에 딸린 폴더 */
@@ -467,6 +629,8 @@ export function getFolderByTarget(targetId) {
 export function latestRecordAcrossFolders() {
   let best = null;
   for (const folder of folders) {
+    // 홈의 "최근 피부 상태"는 피부 질환 기록을 보여주는 카드라 피부 장벽 전용 폴더는 건너뛴다
+    if (isBarrierFolder(folder)) continue;
     const last = folder.records[folder.records.length - 1];
     if (last && (!best || last.ts > best.record.ts)) best = { folder, record: last };
   }
@@ -554,13 +718,13 @@ function uniqueFolderName(name) {
  *           thickening: number, itchVas: number|null, areaPct: number,
  *           faceAreaIndex?: number|null, faceAreaKind?: 'face'|'torso'|null, lowRes?: boolean,
  *           areaRegions?: {index: number, iga: number}[]|null,
- *           photoUri?: string, maskUri?: string,
- *           symptomMaskUris?: Partial<Record<'redness'|'bumps'|'scratch'|'thickening', string|null>>|null }} args
+ *           photoUri?: string, maskUri?: string, skinScan?: any }} args
  * @returns {{ record: any, hasSleepSource: boolean }|null}
  */
 export function recordExam({
   folderId, iga, redness, bumps, scratch, thickening, itchVas, areaPct,
-  faceAreaIndex = null, faceAreaKind = null, lowRes = false, areaRegions = null, photoUri, maskUri, symptomMaskUris = null,
+  faceAreaIndex = null, faceAreaKind = null, lowRes = false, areaRegions = null, photoUri, maskUri,
+  skinScan = null,
 }) {
   const folder = folders.find((f) => f.id === folderId);
   if (!folder) return null;
@@ -619,13 +783,10 @@ export function recordExam({
     */
     overlay: maskUri ? { uri: maskUri } : null,
     /*
-      증상별(홍반·구진·찰상·태선화) 검출 영역을 따로 합성한 투명 이미지 — 결과·상세 화면의 증상 레이어
-      칩이 켜진 것만 사진 위에 겹쳐 그린다. 증상별 분할 모델이 붙기 전에는 없다(null) — 그때 화면은
-      overlay 하나로 전체 영역만 켜고 끈다. overlay와 마찬가지로 직전 기록에서 물려받지 않는다.
+      피부 장벽 측정 결과 — 신규 증상 기록에서 피부 장벽 측정까지 했으면 서버 응답(SkinScanResult)에
+      얼굴 사진(photo)을 붙여 넘겨받는다. 안 쟀으면 null이라 띠에서 회색(미측정)으로 보인다.
     */
-    symptomOverlays: symptomMaskUris
-      ? Object.fromEntries(Object.entries(symptomMaskUris).filter(([, u]) => !!u).map(([k, u]) => [k, { uri: u }]))
-      : null,
+    skinScan,
   };
 
   /*
@@ -645,6 +806,78 @@ export function recordExam({
   folders = folders.map((f) => (f.id === folder.id ? { ...f, records } : f));
   emit();
   return { record, hasSleepSource: !!last };
+}
+
+/** 피부 장벽 폴더 id — 없으면 새로 만든다 (폴더는 하나뿐이다) */
+export function ensureBarrierFolder() {
+  const existing = folders.find(isBarrierFolder);
+  if (existing) return existing.id;
+  const id = `fb_${Date.now()}`;
+  folders = [
+    ...folders,
+    { id, kind: 'barrier', targetId: BARRIER_TARGET_ID, name: BARRIER_FOLDER_NAME, startDate: todayKey(), createdTs: Date.now(), records: [] },
+  ];
+  emit();
+  return id;
+}
+
+/**
+ * 피부 장벽 폴더에 오늘 기록을 남긴다 — 피부 질환을 넘어가고 피부 장벽만 잰 촬영.
+ * @param {{ folderId: string, skinScan: any, itchVas: number|null }} args
+ * @returns {{ record: any }|null}
+ */
+export function recordBarrier({ folderId, skinScan, itchVas }) {
+  const folder = folders.find((f) => f.id === folderId);
+  if (!folder) return null;
+  const date = todayKey();
+  const last = folder.records[folder.records.length - 1];
+  const record = barrierRecord({
+    folderId,
+    date,
+    dayOffset: daysBetween(folder.startDate, date),
+    ts: Date.now(),
+    sleepScore: last ? last.sleepScore : 75,
+    itchVas: itchVas != null ? clamp(Math.round(itchVas), 0, 10) : (last ? last.itchVas : 0),
+    skinScan,
+  });
+  const records = [...folder.records, record].sort((a, b) => a.dayOffset - b.dayOffset || a.ts - b.ts);
+  folders = folders.map((f) => (f.id === folderId ? { ...f, records } : f));
+  emit();
+  return { record };
+}
+
+/**
+ * 기록 하나를 지운다 — 이어서 기록하기에서 피부 질환을 "다시 촬영"하면 같은 회차의 앞 기록을
+ * 새 기록으로 바꿔야 해서 쓴다(안 지우면 같은 회차가 두 줄로 남는다).
+ *
+ * @returns {boolean} 지웠는지
+ */
+export function removeRecord(folderId, recordId) {
+  const folder = folders.find((f) => f.id === folderId);
+  if (!folder || !folder.records.some((r) => r.id === recordId)) return false;
+  const records = folder.records.filter((r) => r.id !== recordId);
+  folders = folders.map((f) => (f.id === folderId ? { ...f, records } : f));
+  emit();
+  return true;
+}
+
+/**
+ * 이미 남긴 기록에 피부 장벽 측정 결과를 붙인다 — 이어서 기록하기에서 피부 질환을 먼저 찍고
+ * 피부 장벽을 나중에 쟀을 때 쓴다(반대 순서면 recordExam의 skinScan으로 처음부터 함께 넣는다).
+ * 다시 쟀으면 새 값으로 덮어쓴다 — 한 기록에 피부 장벽은 하나다.
+ *
+ * @param {string} folderId
+ * @param {string} recordId
+ * @param {any} skinScan — 서버 응답(SkinScanResult)에 얼굴 사진 photo를 붙인 것
+ * @returns {boolean} 붙였는지
+ */
+export function attachSkinScan(folderId, recordId, skinScan) {
+  const folder = folders.find((f) => f.id === folderId);
+  if (!folder || !folder.records.some((r) => r.id === recordId)) return false;
+  const records = folder.records.map((r) => (r.id === recordId ? { ...r, skinScan } : r));
+  folders = folders.map((f) => (f.id === folderId ? { ...f, records } : f));
+  emit();
+  return true;
 }
 
 /**

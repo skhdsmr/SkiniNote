@@ -5,8 +5,8 @@ import Svg, { Rect } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
 import { AppColors, cardDecoration } from '../theme';
 import { plainSiteLabel } from '../models';
-import { useFolders, folderHasSeverity } from '../folders/store';
-import { DISPLAY_SCALE, skinConditionInfo, itchBand, sleepBand } from '../folders/theme';
+import { useFolders, folderHasSeverity, isBarrierFolder } from '../folders/store';
+import { DISPLAY_SCALE, skinConditionInfo, itchBand, sleepBand, skinBarrierInfo } from '../folders/theme';
 import LesionThumb from '../folders/components/LesionThumb';
 import { useMonitoring } from '../context/MonitoringContext';
 import { useProfile } from '../context/ProfileContext';
@@ -45,7 +45,7 @@ export default function RecordsScreen({ route }: { route?: any }) {
   const [view, setView] = useState(() => new Date());
   // 캘린더를 누르기 전에도 오늘 기록이 바로 보이도록, 기본 선택 날짜를 오늘로 둔다.
   const [selectedKey, setSelectedKey] = useState<string | null>(() => todayCellKey());
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   /** 가려움 카드가 화면 어디쯤에 있는지 — 넘어왔을 때 거기까지 데려다주려고 재 둔다 */
   const itchCardY = useRef(0);
   const [itchOpenToken, setItchOpenToken] = useState(0);
@@ -141,16 +141,15 @@ export default function RecordsScreen({ route }: { route?: any }) {
       </View>
 
       <View style={{ height: 10 }} />
-      {/* 이 탭에서 가장 자주 쓰는 길 — 지켜보는 자리를 몸 그림으로 보고 그 자리의 경과로 들어간다.
-          (예전의 "전신 결과"는 이 화면으로 합쳤다.) 날짜를 골라야만 나오는
-          그날의 분석 결과보다 먼저 두어, 스크롤하지 않아도 항상 바로 보인다. */}
+      {/* 자리별 경과 관찰은 전신 결과 안에서(행 이름 "몸통 아토피 ›", 범례 "피부 장벽 ›") 들어간다 —
+          그래서 여기엔 "경과 관찰" 버튼을 따로 두지 않는다. */}
       <ActionBox
-        icon="timeline"
-        title="경과 관찰"
-        caption={folders.length ? `${folders.length}곳을 지켜보고 있어요 · 몸 그림으로 한눈에` : '아직 지켜보는 자리가 없어요'}
+        icon="accessibility-new"
+        title="전신 결과"
+        caption="전신 분석 결과 모아보기"
         trailing="chevron-right"
         accent
-        onPress={() => navigation.navigate('Monitoring')}
+        onPress={() => navigation.navigate('WholeBody')}
       />
 
       {selectedKey != null && (
@@ -443,9 +442,9 @@ function DetailSection({
 }
 
 /**
- * 홈의 "최근 피부 상태" 카드와 같은 지표(피부 종합 상태 · 가려움 · 수면 점수)를 보여준다 —
+ * 홈의 "최근 피부 상태" 카드와 같은 지표(피부 장벽 · 피부 질환 · 가려움 · 수면 점수)를 보여준다 —
  * 사진/부위/병명만 이 폴더가 참조하는 모니터링 대상(MonitorTarget)에서 그대로 가져온다.
- * 피부 종합 상태 칸은 질환에 관계없이 늘 있고, 등급(IGA)은 아토피일 때만 배지로 붙는다.
+ * 피부 질환 칸은 질환에 관계없이 늘 있고, 등급(IGA)은 아토피일 때만 배지로 붙는다.
  */
 function DetailCard({
   entry,
@@ -463,8 +462,10 @@ function DetailCard({
   const target = folder.targetId ? findTarget(folder.targetId) : undefined;
   const siteLabel: string | undefined = target ? plainSiteLabel(target.label) : undefined;
   const diseaseName: string = target?.diagnosis?.disease ?? plainSiteLabel(folder.name);
+  // 피부 장벽만 잰 기록(피부 장벽 폴더) — 피부 질환 값이 없어서 그 칸을 뺀다
+  const barrierOnly = isBarrierFolder(folder);
   // 사진 밑에 따로 붙던 부위 배지를 없애는 대신, 병명 앞에 부위를 붙여 "몸통 아토피피부염"처럼 한 줄로 보여준다
-  const displayDiseaseName = [siteLabel, diseaseName].filter(Boolean).join(' ');
+  const displayDiseaseName = barrierOnly ? folder.name : [siteLabel, diseaseName].filter(Boolean).join(' ');
   // 4가지 증상·IGA 모델은 아토피피부염 채점 기준이라, 이 폴더의 진단명이 그게 아니면 값 자체가 없다
   const hasSeverity = folderHasSeverity(folder);
 
@@ -473,6 +474,9 @@ function DetailCard({
   const skin = skinConditionInfo(skinValue);
   const itch = itchBand(itchValue);
   const sleep = healthConnected ? sleepBand(record.sleepScore) : null;
+  // 피부 장벽 — 그 회차에 피부장벽측정(얼굴 스캔)을 했을 때만 값이 있다. 배지는 "또래 상위 N%"
+  const barrierValue: number | null = record.skinScan?.totalScore != null ? Math.round(record.skinScan.totalScore) : null;
+  const barrier = barrierValue != null ? skinBarrierInfo(barrierValue, record.skinScan?.ageGroup) : null;
 
   // 이 기록 한 건에 붙는 메모. label은 나중에 PDF에서 소제목으로 그대로 쓸 이름이다.
   const memoTarget: MemoTarget = {
@@ -483,6 +487,7 @@ function DetailCard({
   };
   const hasMemo = useHasMemo(memoTarget);
 
+  // 그날의 기록이라 상세 결과(하루치)로 연다 — 피부 장벽 기록은 상세 결과 화면이 피부 장벽 구성으로 그린다
   const goDetail = () => navigation.navigate('MonitoringDetail', { folderId: folder.id, recordId: record.id });
 
   return (
@@ -526,11 +531,21 @@ function DetailCard({
             <View style={[styles.statCols, { flex: 1 }]}>
               {/* 홈 화면과 같은 형태(점수 + 중증도)로 맞춘다. IGA 채점은 아토피피부염 기준이라
                   다른 질환은 매길 점수가 없어 "준비중"으로 대신한다. */}
-              <StatCol
-                label="피부 종합 상태"
-                value={hasSeverity ? skinValue : '준비중'}
-                band={hasSeverity ? skin : undefined}
-              />
+              {/* [분리판] 피부 장벽 칸은 피부 장벽 기록에만, 피부 질환 칸은 질환 기록에만 둔다 */}
+              {barrierOnly ? (
+                <StatCol
+                  label="피부 장벽"
+                  value={barrierValue ?? '-'}
+                  band={barrier}
+                  noneText="미측정"
+                />
+              ) : (
+                <StatCol
+                  label="피부 질환"
+                  value={hasSeverity ? skinValue : '준비중'}
+                  band={hasSeverity ? skin : undefined}
+                />
+              )}
               <View style={styles.statColDivider} />
               <StatCol label="가려움 안정도" value={itchValue} band={itch} />
               <View style={styles.statColDivider} />
@@ -553,6 +568,7 @@ function StatCol({
   label,
   value,
   band,
+  noneText = '미기재',
 }: {
   label: string;
   value: number | string;
@@ -561,11 +577,14 @@ function StatCol({
    * 없다"(수면 미연동의 "미기재")를 뜻하므로 "애초에 배지가 없는 칸"과 구분해야 한다.
    */
   band?: { ko: string; color: string } | null;
+  /** band가 null일 때 배지에 적는 말 — 스캔으로 재는 피부 장벽은 "미측정" */
+  noneText?: string;
 }) {
   const isText = typeof value === 'string' && Number.isNaN(Number(value));
   return (
     <View style={styles.statCol}>
-      <Text style={styles.statColLabel} numberOfLines={1}>
+      {/* 네 칸으로 나뉘어 좁다 — "가려움 안정도"처럼 긴 라벨은 잘리지 않게 줄여서 한 줄에 담는다 */}
+      <Text style={styles.statColLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
         {label}
       </Text>
       {/* 값 자리에 점수 대신 질환명이 올 수 있다 — 숫자용 크기 그대로면 칸을 넘긴다.
@@ -582,8 +601,9 @@ function StatCol({
       </View>
       {band !== undefined && (
         <View style={[styles.statColBadge, { backgroundColor: band?.color ?? AppColors.sub }]}>
-          <Text style={styles.statColBandText} numberOfLines={1}>
-            {band?.ko ?? '미기재'}
+          {/* "또래 상위 28%"처럼 긴 배지도 잘리지 않게 줄여서 담는다 */}
+          <Text style={styles.statColBandText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+            {band?.ko ?? noneText}
           </Text>
         </View>
       )}
@@ -648,13 +668,13 @@ const styles = StyleSheet.create({
 
   statCols: { flexDirection: 'row', alignItems: 'stretch' },
   statCol: { flex: 1, alignItems: 'center' },
-  statColDivider: { width: 1, backgroundColor: AppColors.line, marginHorizontal: 6 },
+  statColDivider: { width: 1, backgroundColor: AppColors.line, marginHorizontal: 4 },
   statColLabel: { fontSize: 9.5, fontWeight: '600', color: AppColors.sub },
   /** 15pt 글씨 한 줄 높이 — 값이 숫자든 질환명이든 이 높이로 고정한다 (배지 줄 맞춤) */
   statColValueSlot: { height: 19, width: '100%', justifyContent: 'center', marginTop: 2 },
   statColValue: { fontSize: 15, fontWeight: '800', color: AppColors.ink, textAlign: 'center' },
   /** 값 자리에 질환명이 올 때 — 세 칸으로 나눈 좁은 폭이라 숫자보다는 줄인다 */
   statColValueText: { fontSize: 13 },
-  statColBadge: { borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2, marginTop: 3, maxWidth: '100%' },
+  statColBadge: { borderRadius: 7, paddingHorizontal: 4, paddingVertical: 2, marginTop: 3, maxWidth: '100%' },
   statColBandText: { fontSize: 9.5, fontWeight: '800', color: '#FFFFFF' },
 });

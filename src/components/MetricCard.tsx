@@ -21,6 +21,7 @@ export function MetricCard({
   segments,
   foot,
   children,
+  icon,
 }: {
   label: string;
   value: number;
@@ -29,11 +30,14 @@ export function MetricCard({
   segments: Segment[];
   foot?: string;
   children?: React.ReactNode;
+  /** 제목 왼쪽 지표 아이콘 (경과 관찰 상세 결과에서 쓴다) */
+  icon?: CardIconSpec;
 }) {
   const band = segmentFor(value, segments);
   return (
     <View style={[monitoringCard(), styles.card]}>
       <View style={styles.headRow}>
+        {icon && <CardIcon {...icon} />}
         <Text style={styles.label}>{label}</Text>
         <Text style={styles.value}>
           {Math.round(value)}
@@ -92,11 +96,25 @@ export function MetricRow({
   );
 }
 
+/** 카드 제목 왼쪽에 붙는 지표 아이콘 — 요약칸(SummaryBox·StatBox)과 같은 그림·같은 원 색 */
+export type CardIconSpec = { source: ImageSourcePropType; color: string; size?: number };
+
+export function CardIcon({ source, color, size = 18 }: CardIconSpec) {
+  return (
+    <View style={[styles.cardIconCircle, { backgroundColor: color }]}>
+      <Image source={source} style={{ width: size, height: size }} resizeMode="contain" />
+    </View>
+  );
+}
+
 /** 측정하지 않은 지표 — 0점으로 넣으면 실제로 좋았던 날과 구분이 안 되므로 값 없이 남긴다 */
-export function EmptyMetricCard({ label, text }: { label: string; text: string }) {
+export function EmptyMetricCard({ label, text, icon }: { label: string; text: string; icon?: CardIconSpec }) {
   return (
     <View style={[monitoringCard(), styles.card]}>
-      <Text style={styles.label}>{label}</Text>
+      <View style={styles.titleRow}>
+        {icon && <CardIcon {...icon} />}
+        <Text style={styles.label}>{label}</Text>
+      </View>
       <View style={styles.empty}>
         <Text style={styles.emptyText}>{text}</Text>
       </View>
@@ -107,8 +125,8 @@ export function EmptyMetricCard({ label, text }: { label: string; text: string }
 /**
  * 지표 하나를 작은 정사각 박스로 보여주는 요약칸 — 라벨 / 큰 숫자 / 단계 배지를 세로로 쌓는다.
  * 홈의 "최근 피부 상태" 카드가 원래 자리이고, 기록 탭의 날짜별 분석 결과도 같은 모양을 써서
- * 어느 화면에서 봐도 같은 지표는 같게 보이게 한다. 세 칸을 나란히(피부 종합 상태 · 가려움 ·
- * 수면 점수) 쓰는 게 기본 쓰임이다.
+ * 어느 화면에서 봐도 같은 지표는 같게 보이게 한다. 홈에서는 네 칸을 나란히(피부 장벽
+ * 상태 · 피부 질환 · 가려움 · 수면 점수) 쓴다.
  */
 export function StatBox({
   label,
@@ -116,6 +134,7 @@ export function StatBox({
   band,
   icon,
   circleColor,
+  noneText = '미기재',
 }: {
   label: string;
   value: string;
@@ -124,7 +143,7 @@ export function StatBox({
    *   {...}     — 그 단계로 칠한 배지
    *   null      — 잴 수 있는데 값이 없다 → "미기재" (수면 미연동 등)
    *   넘기지 않음 — 애초에 등급이 없는 칸 → 배지 줄 자체를 그리지 않는다
-   *                 (아토피가 아닌 질환의 피부 종합 상태. "등급 없음"이라 적으면 없는 것을
+   *                 (아토피가 아닌 질환의 피부 질환. "등급 없음"이라 적으면 없는 것을
    *                  굳이 가리키는 셈이라 세 칸 중 그 칸으로만 눈이 끌린다)
    */
   band?: { ko: string; color: string } | null;
@@ -132,6 +151,8 @@ export function StatBox({
   icon?: ImageSourcePropType;
   /** 아이콘 원 배경색 — 어느 지표인지(피부/가려움/수면)를 색으로 이어준다(CHART_SERIES와 같은 색) */
   circleColor?: string;
+  /** band가 null일 때 배지 자리에 적는 말 — 기본 "미기재", 스캔으로 재는 값은 "미측정" */
+  noneText?: string;
 }) {
   // 값 자리에 점수 대신 질환명이 올 수 있다 — 숫자용 크기 그대로면 칸을 넘긴다
   const isText = Number.isNaN(Number(value));
@@ -142,13 +163,17 @@ export function StatBox({
           <View style={[styles.statIconCircle, { backgroundColor: circleColor }]}>
             <Image source={icon} style={styles.statIconImg} resizeMode="contain" />
           </View>
-          <View style={{ height: 6 }} />
+          <View style={{ height: 4 }} />
         </>
       )}
-      <Text style={styles.statLabel} numberOfLines={1}>
-        {label}
-      </Text>
-      <View style={{ height: 7 }} />
+      {/* 세로 길이를 줄이려고 라벨은 한 줄로 고정한다 — "가려움 안정도"처럼 긴 라벨은 칸이 좁으면
+          줄바꿈 대신 글씨를 줄인다 (예전엔 두 줄 높이를 비워 둬서 칸이 길었다) */}
+      <View style={styles.statLabelSlot}>
+        <Text style={styles.statLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+          {label}
+        </Text>
+      </View>
+      <View style={{ height: 4 }} />
       {/* 값 줄의 높이를 글씨 크기와 무관하게 고정한다 — 안 그러면 질환명이 들어간 칸만
           줄 높이가 낮아져서, 그 아래 배지가 옆 칸들보다 위로 올라붙는다 */}
       <View style={styles.statValueSlot}>
@@ -161,17 +186,34 @@ export function StatBox({
           {value}
         </Text>
       </View>
-      <View style={{ height: 7 }} />
+      <View style={{ height: 4 }} />
       {band !== undefined &&
-        (band ? <Badge text={band.ko} color={band.color} small /> : <Text style={styles.statNone}>미기재</Text>)}
+        (band ? <Badge text={band.ko} color={band.color} small tight /> : <Text style={styles.statNone}>{noneText}</Text>)}
     </View>
   );
 }
 
-export function Badge({ text, color, small }: { text: string; color: string; small?: boolean }) {
+export function Badge({
+  text,
+  color,
+  small,
+  tight,
+}: {
+  text: string;
+  color: string;
+  small?: boolean;
+  /** 좁은 칸(요약칸 네 개가 나란히)용 — 좌우 여백·최소 폭을 줄여 "매우 나쁨"이 잘리지 않게 한다 */
+  tight?: boolean;
+}) {
   return (
-    <View style={[styles.badge, small && styles.badgeSmall, { backgroundColor: color }]}>
-      <Text style={[styles.badgeText, small && styles.badgeTextSmall]} numberOfLines={1}>
+    <View style={[styles.badge, small && styles.badgeSmall, tight && styles.badgeTight, { backgroundColor: color }]}>
+      {/* 좁은 요약칸에서 "또래 상위 12%"처럼 긴 글씨가 잘리지 않게 줄여서 한 줄에 담는다 */}
+      <Text
+        style={[styles.badgeText, small && styles.badgeTextSmall, tight && styles.badgeTextTight]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.6}
+      >
         {text}
       </Text>
     </View>
@@ -182,6 +224,10 @@ const styles = StyleSheet.create({
   card: { padding: 16 },
   headRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   label: { fontSize: 16, fontWeight: '800', color: mc.ink },
+  titleRow: { flexDirection: 'row', alignItems: 'center' },
+  cardIconCircle: {
+    width: 28, height: 28, borderRadius: 14, marginRight: 8, alignItems: 'center', justifyContent: 'center',
+  },
   value: { fontSize: 15, fontWeight: '800', color: mc.ink, marginLeft: 8 },
   unit: { fontSize: 11, fontWeight: '700', color: mc.sub },
   foot: { fontSize: 11.5, color: mc.sub, marginTop: 10, lineHeight: 17 },
@@ -196,6 +242,9 @@ const styles = StyleSheet.create({
 
   badge: { borderRadius: 9, paddingHorizontal: 12, paddingVertical: 6, minWidth: 62, alignItems: 'center' },
   badgeSmall: { paddingHorizontal: 10, paddingVertical: 4, minWidth: 54 },
+  // 요약칸 배지 — 경과 관찰 페이지 요약칸 배지(summaryPill)와 같은 높이·글씨
+  badgeTight: { paddingHorizontal: 5, paddingVertical: 3, minWidth: 0, maxWidth: '100%', borderRadius: 10 },
+  badgeTextTight: { fontSize: 10.5 },
   badgeText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
   badgeTextSmall: { fontSize: 11.5 },
 
@@ -207,14 +256,16 @@ const styles = StyleSheet.create({
 
   statBox: {
     flex: 1, alignItems: 'center', backgroundColor: '#F6F8FA', borderRadius: 14,
-    paddingVertical: 12, paddingHorizontal: 4,
+    paddingVertical: 9, paddingHorizontal: 4,
   },
+  // 경과 관찰 페이지 요약칸(SummaryBox)과 같은 크기·간격 — 두 화면의 네 칸이 같은 세로 길이로 보인다
   statIconCircle: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   statIconImg: { width: 17, height: 17 },
-  statLabel: { fontSize: 13.5, fontWeight: '700', color: AppColors.sub },
+  statLabelSlot: { height: 18, justifyContent: 'center', alignSelf: 'stretch' },
+  statLabel: { fontSize: 12.5, lineHeight: 16, fontWeight: '700', color: AppColors.sub, textAlign: 'center' },
   /** 21pt 글씨 한 줄이 차지하는 높이 — 값이 숫자든 질환명이든 이 높이로 고정한다 */
-  statValueSlot: { height: 26, width: '100%', justifyContent: 'center' },
-  statValue: { fontSize: 21, fontWeight: '800', color: AppColors.ink, textAlign: 'center' },
+  statValueSlot: { height: 27, width: '100%', justifyContent: 'center' },
+  statValue: { fontSize: 22, fontWeight: '800', color: AppColors.ink, textAlign: 'center' },
   /** 값 자리에 질환명이 올 때 — 숫자만큼 키우면 칸을 넘치지만, 읽히지 않을 만큼 줄이지도 않는다 */
   statValueText: { fontSize: 17 },
   statNone: { fontSize: 11.5, fontWeight: '800', color: AppColors.sub, paddingVertical: 4 },

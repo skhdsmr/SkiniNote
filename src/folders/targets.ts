@@ -20,7 +20,7 @@ export function folderNameOf(siteLabel: string, disease?: string): string {
  * 짝이 되는 대상이 있어야 한다. baseline은 비워 둔다: 데모 폴더에서 처음 찍는 사진이
  * 그 폴더의 기준 사진이 되는 게 맞다.
  *
- * 팔·머리(주사)는 아토피가 아닌 질환이라 "피부 종합 상태"·"4가지 증상" 카드도, 전신 결과 지도의
+ * 팔·머리(주사)는 아토피가 아닌 질환이라 "피부 질환"·"4가지 증상" 카드도, 전신 결과 지도의
  * 동그라미도 안 뜬다 — 그 예시가 다리 하나뿐이면 지도에 점이 하나만 찍혀 심심해서, 얼굴에 아토피
  * 대상을 하나 더 둔다(다리와 다른 부위라 지도에서 두 곳이 같이 보인다).
  */
@@ -34,7 +34,7 @@ export const DEMO_TARGETS: MonitorTarget[] = [
     spotId: 'demo:arm',
     part: 'rightUpperArm',
     facing: 'front',
-    label: '오른쪽 팔',
+    label: '팔',
     diagnosis: { diagnosed: true, disease: '건선', source: 'self' },
     createdAt: new Date(),
     sessionCount: 0,
@@ -92,19 +92,6 @@ export const DEMO_TARGETS: MonitorTarget[] = [
     createdAt: new Date(),
     sessionCount: 0,
   },
-  {
-    // 팔 아토피 — 기존 '팔 건선'(demo:arm)과 겹치면 안 되므로 spotId·id를 따로 쓴다
-    id: 'tgt_demo_arm_atopy',
-    modelId: 'adultMale',
-    spotId: 'demo:arm_atopy',
-    part: 'leftForearm',
-    facing: 'front',
-    // 건선(오른쪽 팔)과 좌우가 달라야 경과 관찰 지도에서 두 팔이 따로 찍힌다
-    label: '왼쪽 팔',
-    diagnosis: { diagnosed: true, disease: '아토피피부염', source: 'self' },
-    createdAt: new Date(),
-    sessionCount: 0,
-  },
 ];
 
 /**
@@ -125,7 +112,7 @@ export const DEMO_TARGETS: MonitorTarget[] = [
  * 등급이 매겨지는 몸통을 앞에 둬야 그 카드가 점수까지 온전히 보여준다 — 건선이 앞에 오면 같은
  * 자리에 점수 대신 질환명만 적힌다.
  */
-export const VISIBLE_DEMO_TARGET_IDS: readonly string[] = ['tgt_demo_torso', 'tgt_demo_arm', 'tgt_demo_cheek', 'tgt_demo_arm_atopy'];
+export const VISIBLE_DEMO_TARGET_IDS: readonly string[] = ['tgt_demo_torso', 'tgt_demo_arm'];
 
 /** 화면에 올릴 데모 대상만 — 모니터링 목록·이어서 기록하기가 이 목록을 쓴다 */
 export const VISIBLE_DEMO_TARGETS: MonitorTarget[] = DEMO_TARGETS.filter((t) =>

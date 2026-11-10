@@ -4,25 +4,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppColors } from '../theme';
 import Body2DView, { BodyPoint2D } from '../components/Body2DView';
-import {
-  BodySpot,
-  COARSE_OF_SIDED,
-  SIDE_OF_SIDED,
-  SIDED_GROUPS,
-  SIDED_LABELS,
-  SIDED_SPOTS,
-  SidedGroupId,
-  sidedGroupOf,
-} from '../monitoring/bodyParts';
+import { BodySpot } from '../monitoring/bodyParts';
+import { COARSE_GROUPS, COARSE_SPOTS, CoarseGroupId, coarseDisplayName } from '../monitoring/bodyParts';
 
 /**
- * 부위 선택 — 머리 · 몸통 · 오른쪽/왼쪽 팔 · 오른쪽/왼쪽 다리 중 하나만 고른다.
+ * 부위 선택 — 머리 · 몸통 · 팔 · 다리 네 덩어리 중 하나만 고른다.
  *
  * 예전에는 여기서 큰 덩어리를 고른 뒤 다음 화면에서 다시 세부 면(상완 앞 / 팔오금 / 손등 …)까지
  * 골라야 했는데, 매번 찍을 때마다 거치는 단계치고 너무 잘게 나뉘어 있었다. 지금은 몸 그림을
- * 탭하거나 아래 칩을 눌러 한 번만 고르면 끝난다. 팔·다리는 좌우를 고른다 — 경과 관찰이 몸 그림 위에
- * 지켜보는 자리를 찍어 보여주므로, 어느 쪽인지 알아야 그 쪽에 찍을 수 있다. 그림은 앞에서 본
- * 모습이라 그림의 왼쪽이 사용자의 오른쪽이다(그림 아래에 오른쪽/왼쪽을 적어 둔다).
+ * 탭하거나 아래 칩을 눌러 한 번만 고르면 끝난다. 좌우도 나누지 않는다 — 시간이 지나면 어느
+ * 쪽이었는지 기억하지 못해서 목록에서 구분이 도움이 되지 않는다.
  */
 export default function PartSelectScreen({
   onBack,
@@ -31,7 +22,7 @@ export default function PartSelectScreen({
   onBack: () => void;
   onNext: (spot: BodySpot) => void;
 }) {
-  const [group, setGroup] = useState<SidedGroupId | null>(null);
+  const [group, setGroup] = useState<CoarseGroupId | null>(null);
   const [marker, setMarker] = useState<BodyPoint2D | null>(null);
   const insets = useSafeAreaInsets();
 
@@ -46,22 +37,20 @@ export default function PartSelectScreen({
 
       <View style={styles.viewer}>
         <Body2DView
-          highlightGroup={group ? COARSE_OF_SIDED[group] : null}
-          highlightSide={group ? SIDE_OF_SIDED[group] : null}
-          showSideLabels
+          highlightGroup={group}
           marker={marker}
-          onPick={(pickedGroup, point, side) => {
-            setGroup(sidedGroupOf(pickedGroup, side));
+          onPick={(pickedGroup, point) => {
+            setGroup(pickedGroup);
             setMarker(point);
           }}
         />
       </View>
 
       {/* 정면 그림만으로는 짚기 어려운 부위(등·엉덩이 등)를 위해 같은 선택지를 버튼으로도 둔다.
-          2열 격자로 고정한다(머리·몸통 / 오른쪽·왼쪽 팔 / 오른쪽·왼쪽 다리) — flexWrap에 맡기면 화면 너비에
-          따라 줄이 들쭉날쭉해지고 칸 너비도 글자 수에 따라 달라진다. 서로 대등한 선택지라 같은 크기여야 한다. */}
+          2행 2열 격자로 고정한다 — flexWrap에 맡기면 화면 너비에 따라 3+1로 잘려 넷째가 혼자
+          남고, 칸 너비도 글자 수에 따라 들쭉날쭉해진다. 넷은 서로 대등한 선택지라 같은 크기여야 한다. */}
       <View style={styles.chipGrid}>
-        {[SIDED_GROUPS.slice(0, 2), SIDED_GROUPS.slice(2, 4), SIDED_GROUPS.slice(4)].map((row, i) => (
+        {[COARSE_GROUPS.slice(0, 2), COARSE_GROUPS.slice(2)].map((row, i) => (
           <View key={i} style={styles.chipRow}>
             {row.map((g) => {
               const selected = group === g;
@@ -75,7 +64,7 @@ export default function PartSelectScreen({
                   }}
                 >
                   <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                    {SIDED_LABELS[g]}
+                    {coarseDisplayName(g)}
                   </Text>
                 </Pressable>
               );
@@ -86,13 +75,13 @@ export default function PartSelectScreen({
 
       <View style={styles.footer}>
         <Text style={styles.selectionText}>
-          {group ? SIDED_LABELS[group] : '부위를 선택해주세요'}
+          {group ? coarseDisplayName(group) : '부위를 선택해주세요'}
         </Text>
         <View style={{ height: 12 }} />
         <Pressable
           style={[styles.nextBtn, !group && styles.nextBtnDisabled]}
           disabled={!group}
-          onPress={() => group && onNext(SIDED_SPOTS[group])}
+          onPress={() => group && onNext(COARSE_SPOTS[group])}
         >
           <Text style={[styles.nextBtnText, !group && styles.nextBtnTextDisabled]}>이 부위로 선택</Text>
         </Pressable>

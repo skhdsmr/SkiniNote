@@ -1,15 +1,25 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ImageSourcePropType, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppColors, cardDecoration } from '../theme';
 import { plainSiteLabel } from '../models';
-import { useFolders } from '../folders/store';
+import { useFolders, isBarrierFolder } from '../folders/store';
+import { FACE_SCAN_TARGET } from './SkinScanScreen';
 import { useMonitoring } from '../context/MonitoringContext';
 import { MonitorTarget } from '../monitoring/types';
+import { BARRIER_SERIES, CHART_SERIES } from '../folders/theme';
+
+const BARRIER_ICON = require('../../assets/icon/barrier_icon_white.png');
+const DISEASE_ICON = require('../../assets/icon/disease_icon_white.png');
+
+/** 신규 증상 기록하기에서 무엇을 잴지 */
+export type NewMeasure = 'disease' | 'barrier';
 
 /**
  * 피부 촬영 탭의 첫 화면 — 이번에 무엇을 할지 고른다.
+ *   이어서 기록하기: 아토피 자리 또는 "피부 장벽" 폴더를 골라 오늘 기록을 더한다
+ *   신규 증상 기록하기: 무엇을 잴지 고른다 — 피부 질환 측정(새 자리 등록) / 피부 장벽 측정
  *
  *   이어서 기록하기   : 지켜보던 자리에 오늘 기록을 더한다 (촬영 방법 → 촬영 → 결과)
  *   신규 증상 기록하기: 새 자리를 등록하고 처음부터 기록한다 (부위 → 촬영 방법 → 촬영 → 결과)
@@ -28,15 +38,19 @@ export default function ExamStartScreen({
   initialPick = null,
   onNewExam,
   onFollowUp,
+  onBack,
 }: {
   /** 홈의 버튼으로 들어오면 그 선택지를 미리 고른 상태로 연다 */
   initialPick?: 'new' | 'followUp' | null;
-  onNewExam: () => void;
+  onNewExam: (measure: NewMeasure) => void;
   onFollowUp: (folderId: string, target: MonitorTarget) => void;
+  /** 있으면 왼쪽 위에 뒤로가기를 그린다 (측정 화면은 스택이라 하단 탭 바가 없다) */
+  onBack?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const [picked, setPicked] = useState<'new' | 'followUp' | null>(initialPick);
   const [pickedFolderId, setPickedFolderId] = useState<string | null>(null);
+  const [newMeasure, setNewMeasure] = useState<NewMeasure | null>(null);
   const folders = useFolders();
   const { findTarget } = useMonitoring();
 
@@ -47,7 +61,12 @@ export default function ExamStartScreen({
   const candidates = useMemo(
     () =>
       folders
-        .map((f: any) => ({ folder: f, target: f.targetId ? findTarget(f.targetId) : undefined }))
+        // 피부 장벽 폴더는 촬영 대상이 얼굴 하나로 정해져 있어서 저장소에 대상이 없어도 이어 찍을 수 있다
+        // (고르면 장벽 측정 갈래로 들어간다 — CameraScreen onFollowUp)
+        .map((f: any) => ({
+          folder: f,
+          target: isBarrierFolder(f) ? FACE_SCAN_TARGET : f.targetId ? findTarget(f.targetId) : undefined,
+        }))
         .filter((c: any) => !!c.target)
         .map((c: any) => ({ ...c, last: c.folder.records[c.folder.records.length - 1] }))
         .sort((a: any, b: any) => (b.last?.ts ?? 0) - (a.last?.ts ?? 0)),
@@ -55,17 +74,21 @@ export default function ExamStartScreen({
   );
 
   const selected = candidates.find((c: any) => c.folder.id === pickedFolderId);
-  const canProceed = picked === 'new' || (picked === 'followUp' && !!selected);
+  const canProceed = (picked === 'new' && !!newMeasure) || (picked === 'followUp' && !!selected);
 
   const proceed = () => {
-    if (picked === 'new') onNewExam();
+    if (picked === 'new' && newMeasure) onNewExam(newMeasure);
     else if (selected) onFollowUp(selected.folder.id, selected.target);
   };
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
+        <Pressable style={styles.backBtn} onPress={onBack} disabled={!onBack} hitSlop={8}>
+          {onBack && <MaterialIcons name="chevron-left" size={26} color={AppColors.ink} />}
+        </Pressable>
         <Text style={styles.headerTitle}>피부 촬영</Text>
+        <View style={styles.backBtn} />
       </View>
       <Text style={styles.step}>오늘은 무엇을 할까요?</Text>
 
@@ -88,6 +111,33 @@ export default function ExamStartScreen({
           />
         </View>
 
+        {/* 신규 증상 기록하기를 고르면 바로 아래에서 무엇을 잴지 고른다 */}
+        {picked === 'new' && (
+          <>
+            <View style={{ height: 18 }} />
+            <Text style={styles.listLabel}>무엇을 측정할까요?</Text>
+            <View style={{ height: 8 }} />
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <MeasureCard
+                icon={DISEASE_ICON}
+                color={CHART_SERIES.skin.color}
+                title="피부 질환 측정"
+                sub="병변 · 증상 4가지"
+                selected={newMeasure === 'disease'}
+                onPress={() => setNewMeasure('disease')}
+              />
+              <MeasureCard
+                icon={BARRIER_ICON}
+                color={BARRIER_SERIES.color}
+                title="피부 장벽 측정"
+                sub="주름 · 모공 · 수분량"
+                selected={newMeasure === 'barrier'}
+                onPress={() => setNewMeasure('barrier')}
+              />
+            </View>
+          </>
+        )}
+
         {/* 이어서 기록하기를 고르면 다음 페이지로 넘어가지 않고 여기서 바로 자리를 고른다 */}
         {picked === 'followUp' && (
           <>
@@ -107,7 +157,7 @@ export default function ExamStartScreen({
               candidates.map(({ folder, target, last }: any) => (
                 <SiteRow
                   key={folder.id}
-                  name={siteName(target)}
+                  name={isBarrierFolder(folder) ? folder.name : siteName(target)}
                   date={last ? last.date.split('-').join('.') : '기록 없음'}
                   selected={pickedFolderId === folder.id}
                   onPress={() => setPickedFolderId(folder.id)}
@@ -129,6 +179,33 @@ export default function ExamStartScreen({
         </Pressable>
       </View>
     </View>
+  );
+}
+
+/** 신규 증상에서 잴 것 고르기 — 지표 아이콘(홈 "피부 바로 스캔"과 같은 색 원) + 이름 */
+function MeasureCard({
+  icon,
+  color,
+  title,
+  sub,
+  selected,
+  onPress,
+}: {
+  icon: ImageSourcePropType;
+  color: string;
+  title: string;
+  sub: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable style={[cardDecoration(), styles.measureCard, selected && styles.choiceCardSelected]} onPress={onPress}>
+      <View style={[styles.measureIcon, { backgroundColor: color }]}>
+        <Image source={icon} style={{ width: 22, height: 22 }} resizeMode="contain" />
+      </View>
+      <Text style={styles.measureTitle}>{title}</Text>
+      <Text style={styles.measureSub}>{sub}</Text>
+    </Pressable>
   );
 }
 
@@ -196,6 +273,7 @@ function ChoiceCard({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: AppColors.bg },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 10 },
+  backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '800', color: AppColors.ink },
   step: { textAlign: 'center', fontSize: 12.5, fontWeight: '600', color: AppColors.sub, marginTop: 2 },
 
@@ -213,6 +291,18 @@ const styles = StyleSheet.create({
   choiceIconSelected: { backgroundColor: AppColors.greenTop },
   choiceTitle: { fontSize: 16, fontWeight: '800', color: AppColors.ink, lineHeight: 21 },
   choiceCaption: { fontSize: 12, color: AppColors.sub, lineHeight: 17 },
+
+  measureCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  measureIcon: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  measureTitle: { fontSize: 14.5, fontWeight: '800', color: AppColors.ink, marginTop: 10 },
+  measureSub: { fontSize: 11.5, color: AppColors.sub, marginTop: 3, textAlign: 'center' },
 
   listLabel: { fontSize: 13, fontWeight: '800', color: AppColors.sub, paddingLeft: 2 },
   siteRow: {
@@ -237,26 +327,6 @@ const styles = StyleSheet.create({
   siteIconSelected: { backgroundColor: AppColors.greenTop },
   siteName: { flex: 1, fontSize: 15, fontWeight: '800', color: AppColors.ink },
   siteDate: { fontSize: 12, fontWeight: '600', color: AppColors.sub },
-
-  quickCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-  },
-  quickIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#F1F3F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickTitle: { fontSize: 16, fontWeight: '800', color: AppColors.ink },
-  quickCaption: { fontSize: 12, color: AppColors.sub, lineHeight: 17, marginTop: 4 },
 
   noticeText: { fontSize: 11.5, fontWeight: '600', color: AppColors.sub, lineHeight: 17, marginTop: 4 },
 

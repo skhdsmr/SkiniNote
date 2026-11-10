@@ -305,10 +305,7 @@ export const findSpot = (spotId: string): BodySpot | undefined =>
  * 예전의 세밀한 지점("leftElbow:fossa" 등)은 SPOTS_OF_GROUP에서 나온다.
  */
 export function partsOfSpotId(spotId: string): BodyPartId[] | undefined {
-  if (spotId.startsWith('coarse:')) {
-    const id = spotId.slice(7);
-    return PARTS_OF_SIDED[id as SidedGroupId] ?? PARTS_OF_COARSE[id as CoarseGroupId];
-  }
+  if (spotId.startsWith('coarse:')) return PARTS_OF_COARSE[spotId.slice(7) as CoarseGroupId];
   return findSpot(spotId)?.highlight;
 }
 
@@ -317,7 +314,7 @@ export function partsOfSpotId(spotId: string): BodyPartId[] | undefined {
  *
  * 위의 세밀한 그룹/지점(상완 앞·팔오금·손등 …)은 3D 메시가 원래 들고 있는 태그이고, 실제로
  * 사용자가 고르는 단위는 머리 · 몸통 · 팔 · 다리 넷뿐이다. 좌우도 나누지 않는다 — 며칠 뒤
- * 목록에서 "좌측 팔 / 우측 팔"을 보면 어느 쪽이었는지 기억하지 못하기 때문이다. (→ 아래 SIDED_* 블록에서 팔·다리는 좌우를 나눈다)
+ * 목록에서 "좌측 팔 / 우측 팔"을 보면 어느 쪽이었는지 기억하지 못하기 때문이다.
  * ------------------------------------------------------------------ */
 
 export type CoarseGroupId = 'head' | 'torso' | 'arm' | 'leg';
@@ -386,99 +383,6 @@ export const COARSE_SPOTS: Record<CoarseGroupId, BodySpot> = {
   torso: { id: 'coarse:torso', label: '몸통', group: 'torso', part: 'chest', facing: 'front', view: FRONT, highlight: PARTS_OF_COARSE.torso, row: 0 },
   arm: { id: 'coarse:arm', label: '팔', group: 'rightUpperArm', part: 'rightUpperArm', facing: 'front', view: FRONT, highlight: PARTS_OF_COARSE.arm, row: 0 },
   leg: { id: 'coarse:leg', label: '다리', group: 'rightThigh', part: 'rightThigh', facing: 'front', view: FRONT, highlight: PARTS_OF_COARSE.leg, row: 0 },
-};
-
-/* ------------------------------------------------------------------
- * 팔·다리는 좌우를 나눈다.
- *
- * 예전에는 좌우를 나누지 않았다 — 며칠 뒤 목록에서 "좌측 팔 / 우측 팔"을 보면 어느 쪽이었는지 기억하지
- * 못한다는 이유였다. 그런데 경과 관찰이 몸 그림으로 지켜보는 자리를 보여주게 되면서, 그림 위에서는 양쪽
- * 팔이 같은 곳으로 찍혀 어느 팔을 지켜보는지 알 수 없었다. 그래서 부위 선택에서 좌우를 고르게 하고,
- * 지도에서는 그 쪽에만 표시한다. 몸 그림은 앞에서 본 모습이라 **사용자의 왼쪽이 그림의 오른쪽**이다.
- *
- * 덩어리 판정(CoarseGroupId)은 그대로 두고 좌우만 덧붙인 키(SidedGroupId)를 따로 둔다 — 기존 기록
- * ("coarse:arm", 좌우 없음)은 양쪽 모두로 읽힌다.
- * ------------------------------------------------------------------ */
-
-export type BodySide = 'left' | 'right';
-export type SidedGroupId = 'head' | 'torso' | 'armLeft' | 'armRight' | 'legLeft' | 'legRight';
-
-/** 선택 칩·목록에 놓는 순서 — 그림에서 왼쪽에 보이는 쪽(사용자의 오른쪽)이 먼저 */
-export const SIDED_GROUPS: SidedGroupId[] = ['head', 'torso', 'armRight', 'armLeft', 'legRight', 'legLeft'];
-
-export const SIDED_LABELS: Record<SidedGroupId, string> = {
-  head: '머리',
-  torso: '몸통',
-  armLeft: '왼쪽 팔',
-  armRight: '오른쪽 팔',
-  legLeft: '왼쪽 다리',
-  legRight: '오른쪽 다리',
-};
-
-export const COARSE_OF_SIDED: Record<SidedGroupId, CoarseGroupId> = {
-  head: 'head',
-  torso: 'torso',
-  armLeft: 'arm',
-  armRight: 'arm',
-  legLeft: 'leg',
-  legRight: 'leg',
-};
-
-export const SIDE_OF_SIDED: Record<SidedGroupId, BodySide | null> = {
-  head: null,
-  torso: null,
-  armLeft: 'left',
-  armRight: 'right',
-  legLeft: 'left',
-  legRight: 'right',
-};
-
-/** 덩어리 + 좌우 → 좌우를 반영한 키. 팔·다리가 아니거나 좌우를 모르면 덩어리 그대로(머리·몸통) */
-export function sidedGroupOf(group: CoarseGroupId, side: BodySide | null): SidedGroupId {
-  if (group === 'head' || group === 'torso') return group;
-  const base = group === 'arm' ? 'arm' : 'leg';
-  return `${base}${side === 'left' ? 'Left' : 'Right'}` as SidedGroupId;
-}
-
-const sideOfPart = (part: BodyPartId): BodySide | null =>
-  part.startsWith('left') ? 'left' : part.startsWith('right') ? 'right' : null;
-
-/** 좌우를 반영한 키별로 속한 메시 부위들 */
-export const PARTS_OF_SIDED: Record<SidedGroupId, BodyPartId[]> = (() => {
-  const out = { head: [], torso: [], armLeft: [], armRight: [], legLeft: [], legRight: [] } as Record<SidedGroupId, BodyPartId[]>;
-  (Object.keys(COARSE_OF_PART) as BodyPartId[]).forEach((part) => {
-    out[sidedGroupOf(COARSE_OF_PART[part], sideOfPart(part))].push(part);
-  });
-  return out;
-})();
-
-/**
- * 부위 목록 → 지도에 표시할 키들. 한쪽 부위만 있으면 그쪽 키 하나, 양쪽이 섞여 있으면(좌우를 나누기 전의
- * 기록 "coarse:arm") 덩어리 키('arm'·'leg') 하나로 돌려줘 양쪽 모두에 표시되게 한다.
- */
-export function markerKeysOfParts(parts: BodyPartId[]): (CoarseGroupId | SidedGroupId)[] {
-  const keys = new Set<CoarseGroupId | SidedGroupId>();
-  (['arm', 'leg'] as const).forEach((g) => {
-    const mine = parts.filter((p) => COARSE_OF_PART[p] === g);
-    if (!mine.length) return;
-    const sides = new Set(mine.map(sideOfPart));
-    keys.add(sides.size === 1 ? sidedGroupOf(g, [...sides][0]) : g);
-  });
-  parts.forEach((p) => {
-    const g = COARSE_OF_PART[p];
-    if (g === 'head' || g === 'torso') keys.add(g);
-  });
-  return [...keys];
-}
-
-/** 좌우를 나눈 촬영 자리 — 부위 선택이 이걸 만든다 (id: "coarse:armLeft" 등) */
-export const SIDED_SPOTS: Record<SidedGroupId, BodySpot> = {
-  head: COARSE_SPOTS.head,
-  torso: COARSE_SPOTS.torso,
-  armLeft: { id: 'coarse:armLeft', label: '왼쪽 팔', group: 'leftUpperArm', part: 'leftUpperArm', facing: 'front', view: FRONT, highlight: PARTS_OF_SIDED.armLeft, row: 0 },
-  armRight: { id: 'coarse:armRight', label: '오른쪽 팔', group: 'rightUpperArm', part: 'rightUpperArm', facing: 'front', view: FRONT, highlight: PARTS_OF_SIDED.armRight, row: 0 },
-  legLeft: { id: 'coarse:legLeft', label: '왼쪽 다리', group: 'leftThigh', part: 'leftThigh', facing: 'front', view: FRONT, highlight: PARTS_OF_SIDED.legLeft, row: 0 },
-  legRight: { id: 'coarse:legRight', label: '오른쪽 다리', group: 'rightThigh', part: 'rightThigh', facing: 'front', view: FRONT, highlight: PARTS_OF_SIDED.legRight, row: 0 },
 };
 
 /**

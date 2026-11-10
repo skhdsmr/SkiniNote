@@ -36,7 +36,7 @@ export default function ItchVasSlider({
   /** 지금 단계(band)의 색 — 채움·손잡이가 함께 이 색을 쓴다 */
   color: string;
 }) {
-  const trackRef = useRef<View>(null);
+  const trackRef = useRef<React.ComponentRef<typeof View>>(null);
   const geom = useRef({ x: 0, width: 0 });
 
   const updateFromPageX = (pageX: number) => {

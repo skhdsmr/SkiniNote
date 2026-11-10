@@ -1,22 +1,38 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { monitoringColors as mc, monitoringCard, DISPLAY_SCALE, SKIN_SEGMENTS } from '../theme';
-import { useFolder, folderHasSeverity, setFolderBaseline } from '../store';
+import {
+  monitoringColors as mc, monitoringCard, sleepBand, itchBand, skinConditionInfo, DISPLAY_SCALE,
+  SKIN_SEGMENTS, ITCH_SEGMENTS, SLEEP_SEGMENTS, SYMPTOM_SEGMENTS_BASE, SYMPTOMS, CHART_SERIES,
+  BARRIER_SERIES, skinBarrierInfo,
+} from '../theme';
+import { useFolder, folderHasSeverity, isBarrierFolder } from '../store';
 import { useMonitoring } from '../../context/MonitoringContext';
-import { MetricCard } from '../../components/MetricCard';
-import SymptomGroupCard from '../../components/SymptomGroupCard';
-import SymptomLayerPhoto from '../../components/SymptomLayerPhoto';
-import { SYMPTOM_GROUPS, INSIGHT_ROUTE } from '../../symptoms/groups';
+import { useProfile } from '../../context/ProfileContext';
+import { useRoutines } from '../../context/RoutineContext';
+import { plainSiteLabel } from '../../models';
+import { MetricCard, MetricRow, EmptyMetricCard } from '../../components/MetricCard';
 import AreaTrendCard from '../components/AreaTrendCard';
 import { supportsAreaTracking } from '../../monitoring/bodyParts';
+import TrendChart, {
+  TrendChartLegend, TrendChartYAxis, chartContentWidth, POINT_W, Y_AXIS_W,
+  BarrierScoreChart, BarrierScoreYAxis, BARRIER_CHART_H,
+} from '../components/TrendChart';
+import LesionThumb from '../components/LesionThumb';
 import PhotoZoomModal from '../components/PhotoZoomModal';
-import ProgressGraphs from '../components/ProgressGraphs';
-import { AXES, axisPoints, axisVerdict, baseIndexOf, toneOf, VERDICTS } from '../progress';
+import { ScanRadarCard, MoistureBox } from '../../screens/SkinScanScreen';
+import { topPctText, totalTopPct } from '../../skinScan/api';
+import { METRIC_ICONS } from '../../components/metricIcons';
 
+// 상세 결과와 사용한 제품이 아래에 붙으면서 한 화면에 다 들어가지 않게 되어, 페이지 전체를
+// 세로로 스크롤한다. 그래프 SVG는 픽셀 높이가 필요해서(y축 눈금 위치 계산) flex로 늘릴 수 없고,
+// 스크롤 안에서는 "남는 공간"이라는 것도 없으므로 그래프 카드에 고정 높이를 준다.
+// (예전엔 190px이라 가로 폭에 비해 너무 짧고 뚱뚱해 보였고, 가로 스크롤바가 그래프 맨 아래
+// 선과 겹쳐서 잘린 것처럼 보였다 — 세로를 키우고 TrendChart의 아래 여백(PAD_BOTTOM)도 늘렸다.)
+const GRAPH_ROW_H = 340; // 날짜 칸 줄 + 그래프가 함께 차지하는 높이
+const GRAPH_H_DEFAULT = GRAPH_ROW_H - 60;
 const PHOTO_SIZE = 110;
-
 /**
  * 폴더 화면에 병변 넓이 카드를 보여줄지.
  *
@@ -29,8 +45,20 @@ const PHOTO_SIZE = 110;
  * 생긴다. 그래서 "재되 말하지 않는" 상태로 둔다.
  */
 const SHOW_AREA_CARD = false;
-/** 부위별 증상 카드 — 증상 요약·증상 레이어가 같은 정보를 보여줘서 일단 화면에서만 내려 둔다(ExamResultScreen과 같은 이름). */
-const SHOW_REGION_SYMPTOMS = false;
+const SYMPTOM_ORDER = ['redness', 'bumps', 'scratch', 'thickening'];
+
+// 요약칸 원형 배지 아이콘 — 흰 선화라 배경색(CHART_SERIES 색) 위에 바로 얹는다
+const BARRIER_ICON = require('../../../assets/icon/barrier_icon_white.png');
+const DISEASE_ICON = require('../../../assets/icon/disease_icon_white.png');
+const ITCH_ICON = require('../../../assets/icon/itch_icon_white.png');
+const SLEEP_ICON = require('../../../assets/icon/sleep_icon_white.png');
+// 아래 상세 결과 카드 제목 옆 아이콘 — 신규 기록 결과 화면과 같은 값을 쓴다
+const DETAIL_ICONS = METRIC_ICONS;
+
+// 날짜 칸의 폭 — 그래프 포인트 폭(POINT_W)과 똑같이 맞춰서 같은 가로 스크롤 안에서 날짜 칸과
+// 그래프 데이터가 항상 같은 x 위치에 정렬된다. 높이는 이 칸이 그래프 위에 얹히는 고정 줄 높이.
+const DATE_CELL_W = POINT_W;
+const DATE_ROW_H = 60;
 
 const WEEKDAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -44,132 +72,160 @@ function fmtFull(dateKey) {
   return `${y}.${m}.${d}`;
 }
 
-const REGION_CROP_SIZE = 60;
+// 밝은 배경(노랑/주황 계열)은 흰 글자보다 진한 잉크색 글자가 더 잘 읽혀서 배경색에 따라
+// 글자색을 바꾼다 — 파랑(sev0)·빨강(sev3)은 진한 편이라 흰 글자를 그대로 쓴다.
+const LIGHT_PILL_BGS = [mc.sevCaution, mc.warn];
 
 /**
- * 부위별 증상 카드 — 병변이 여러 곳으로 떨어져 있어(seg가 판정 단위를 2개 이상으로 나눴을 때)
- * 그 부위를 하나씩 잘라 보여주며 4가지 증상 중 "있음/없음"만 알려준다. 촬영 직후 결과 화면
- * (ExamResultScreen의 RegionSymptomsCard)과 같은 목적·같은 규칙(등급은 안 보여준다)이고, 여기서는
- * 그 기록이 지나간 뒤에도 경과 관찰 폴더에서 다시 확인할 수 있게 한다.
+ * 그래프에서 선택된 날짜의 값을 보여주는 요약 박스 — 그래프 포인트를 탭하면 값이 함께 바뀐다.
+ * 원형 배지 색(circleColor)은 그 아래 배지(pillColor, 좋음/나쁨 4단계)와는 다른 축이다 — 이건
+ * "지금 상태가 좋은지 나쁜지"가 아니라 "이 항목이 그래프의 어느 꺾은선인지"를 색으로 잇는다.
+ * 점수 글자색은 항상 검정(ink) — 상태색은 원형 배지·아래 배지 둘로 충분하다.
  *
- * ⚠️ record.regions는 지금은 데모 예시(folders/store.js의 DEMO_REGIONS)에만 붙어 있다 — 실제
- * 촬영이 regions를 기록에 남기려면 CameraScreen.saveExamRecord가 analyzeLocal의 regions를 함께
- * 저장하도록 손대야 한다(지금은 대표값만 남긴다).
+ * 처음 기록 대비 증감은 여기 없다 — 루틴 이행률 카드의 오른쪽 열(TrendMini)로 옮겼다.
  */
-function RegionSymptomsCard({ photo, regions }) {
+function SummaryBox({ label, value, pillText, pillColor, icon, circleColor, iconSize = 22 }) {
+  const pillTextColor = LIGHT_PILL_BGS.includes(pillColor) ? mc.ink : '#fff';
+  /*
+    값 자리에 점수 대신 글자(질환명)가 올 수 있다 — 등급을 매길 수 없는 질환에서 그렇다.
+    22px 굵은 글씨는 두 자리 숫자에 맞춘 크기라 "아토피피부염" 같은 이름이 들어오면 칸을
+    넘긴다. 숫자가 아니면 크기를 줄이고 한 줄로 눌러 담는다.
+  */
+  const isText = typeof value === 'string' && Number.isNaN(Number(value));
   return (
-    <View style={[monitoringCard(), styles.metricCard]}>
-      <Text style={styles.metricCardLabel}>부위별 증상</Text>
-      {regions.map((region, i) => (
-        <View key={i} style={[styles.regionRow, i > 0 && styles.regionRowDivider]}>
-          <View style={styles.regionCropCol}>
-            <RegionCrop photo={photo} bbox={region.bbox} />
-            <Text style={styles.regionCropCaption}>부위 {i + 1}</Text>
-          </View>
-          <View style={styles.regionChips}>
-            <View style={styles.symptomChipRow}>
-              {SYMPTOM_GROUPS.map((group) => {
-                // 묶음에 속한 증상 중 하나라도 이 부위에서 나타났으면 "있음"
-                const present = group.members.some((m) => !!region.symptoms?.[m]);
-                return (
-                  <View key={group.key} style={[styles.symptomChip, present && styles.symptomChipOn]}>
-                    <MaterialIcons
-                      name={present ? 'check-circle' : 'radio-button-unchecked'}
-                      size={13}
-                      color={present ? mc.greenDeep : mc.sub}
-                    />
-                    <Text style={[styles.symptomChipText, present && styles.symptomChipTextOn]}>{group.label}</Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-/**
- * 크롭 한 장 — bbox 사각형을 정사각형 썸네일에 그대로 눌러 넣는다(종횡비 유지 안 함).
- * 중증도 모델이 실제로 보는 입력과 같은 규칙이라, 화면에 보이는 크롭이 곧 "모델이 본 바로 그
- * 사진"이다(ExamResultScreen의 RegionCrop과 같은 규칙 — 자세한 이유는 그쪽 주석 참고).
- */
-function RegionCrop({ photo, bbox }) {
-  const scaleX = REGION_CROP_SIZE / bbox.width;
-  const scaleY = REGION_CROP_SIZE / bbox.height;
-  return (
-    <View style={styles.regionCrop}>
-      <Image
-        source={photo}
-        style={{
-          position: 'absolute',
-          width: bbox.imageWidth * scaleX,
-          height: bbox.imageHeight * scaleY,
-          left: -bbox.x * scaleX,
-          top: -bbox.y * scaleY,
-        }}
-      />
-    </View>
-  );
-}
-
-
-/** 판정 칩 — 축 이름 + 기준일 대비 판정 */
-function VerdictChip({ label, verdict }) {
-  const tone = toneOf(verdict);
-  const pending = verdict === 'pending';
-  return (
-    <View style={[styles.chip, { backgroundColor: tone.bg, borderColor: tone.border }, pending && styles.chipPending]}>
-      <Text style={[styles.chipText, { color: tone.text }]} numberOfLines={1}>
-        {label} <Text style={styles.chipVerdict}>{VERDICTS[verdict].ko}</Text>
-      </Text>
-    </View>
-  );
-}
-
-/** 기준일 사진 ↔ 고른 날 사진을 나란히 */
-function PhotoCompare({ base, record }) {
-  const same = base.id === record.id;
-  return (
-    <View style={[monitoringCard(), styles.photoCard]}>
-      <Text style={styles.cardTitle}>{same ? '기준일 사진' : '사진 비교'}</Text>
-      <View style={styles.compareRow}>
-        <View style={styles.compareCol}>
-          <View style={styles.compareFrame}>{base.photo && <Image source={base.photo} style={styles.fill} resizeMode="cover" />}</View>
-          <Text style={styles.caption}>기준일 {fmtFull(base.date)}</Text>
-        </View>
-        {!same && (
-          <View style={styles.compareCol}>
-            <View style={styles.compareFrame}>{record.photo && <Image source={record.photo} style={styles.fill} resizeMode="cover" />}</View>
-            <Text style={styles.caption}>{fmtFull(record.date)}</Text>
-          </View>
-        )}
+    <View style={[monitoringCard(14), styles.summaryBox]}>
+      <View style={[styles.summaryIconCircle, { backgroundColor: circleColor }]}>
+        {/* 원을 40 → 32로 줄였으니 그림도 같은 비율로 줄인다 */}
+        <Image source={icon} style={{ width: iconSize * 0.8, height: iconSize * 0.8 }} resizeMode="contain" />
       </View>
-      {same && <Text style={styles.hint}>위 그래프의 점을 누르면 그날 사진과 비교해요</Text>}
+      {/* 세로 길이를 줄이려고 라벨은 한 줄로 고정한다 — "가려움 안정도"처럼 긴 라벨은 칸이 좁으면 글씨를
+          줄여 한 줄에 담는다 (예전엔 두 줄 높이를 비워 둬서 칸이 길었다) */}
+      <View style={styles.summaryLabelSlot}>
+        <Text style={styles.summaryLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+          {label}
+        </Text>
+      </View>
+      <View style={styles.summaryValueRow}>
+        <Text
+          style={[styles.summaryValue, isText && styles.summaryValueText]}
+          numberOfLines={1}
+          adjustsFontSizeToFit={isText}
+          minimumFontScale={0.7}
+        >
+          {value}
+        </Text>
+      </View>
+      {pillText != null && (
+        <View style={[styles.summaryPill, { backgroundColor: pillColor }]}>
+          {/* "또래 상위 12%"처럼 긴 배지는 칸이 좁으면 잘리지 않게 글씨를 줄여 한 줄에 담는다 */}
+          <Text
+            style={[styles.summaryPillText, { color: pillTextColor }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
+            {pillText}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
 
 /**
- * 부위 상세 — 이 부위(폴더) 단위 데이터만 보여준다.
- *
- * 가려움·수면·루틴 이행은 사람 단위라 전신 경과(MonitoringMapScreen)로 옮겼다. 두 화면은 같은
- * 날짜축으로만 연결한다. 맨 위는 절대 등급이 아니라 **기준일 대비 판정**이다(progress.js).
+ * 루틴 이행률 카드 오른쪽 열 한 줄 — 처음 기록 대비 "개선/악화"와 등급 이동("나쁨 → 주의")을
+ * 보여준다. 세모(▲/▼)와 "개선/악화" 글자 모두 카드 맨 아래 응원 문구와 같은 색(greenDeep)을 써서
+ * 한 카드 안에서 색이 따로 놀지 않게 한다. delta가 null이면(수면 미연동 등) 등급 이동 없이
+ * "미기재"만 남긴다.
  */
-export default function MonitoringFolderScreen({ navigation, route }) {
+function TrendMini({ label, delta, fromBand, toBand, first, noneText = '미기재' }) {
+  const rounded = delta == null ? null : Math.round(delta);
+  const tag = rounded == null ? noneText : rounded > 0 ? '개선' : rounded < 0 ? '악화' : '유지';
+  return (
+    <View style={[styles.trendMiniItem, first && styles.trendMiniItemFirst]}>
+      <View style={styles.trendMiniHead}>
+        {/* 라벨은 "피부"·"가려움"·"수면" 한 단어뿐이라 오른쪽 열이 좁아도 한 줄로 충분하다 —
+            그래도 컨테이너가 더 좁아지는 경우를 대비해 numberOfLines로 줄바꿈 자체를 막는다
+            (전에는 "피부 질환"처럼 길어서 띄어쓰기 자리에 강제 줄바꿈을 넣었었다). */}
+        <Text style={styles.trendMiniLabel} numberOfLines={1}>{label}</Text>
+        <View style={styles.trendMiniTagRow}>
+          {!!rounded && <Text style={styles.trendMiniArrow}>{rounded > 0 ? '▲' : '▼'}</Text>}
+          <Text style={styles.trendMiniTag} numberOfLines={1}>{tag}</Text>
+        </View>
+      </View>
+      {/*
+        등급 이동("매우 나쁨 → 주의")은 라벨과 한 줄을 나눠 쓰지 않는다 — 라벨(고정폭 44)과
+        같은 줄에 있으면 남는 폭이 좁아 "매우 나쁨"처럼 긴 이름에서 오른쪽이 잘렸다. 줄을
+        통째로 내려 오른쪽 열 전체 폭을 이 텍스트만 쓰게 하면 한 줄에 다 들어간다.
+      */}
+      {fromBand != null && toBand != null && (
+        <Text style={styles.trendMiniBands} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+          {fromBand} → {toBand}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+/** 날짜 선택 줄의 칸 하나 — 요일(위) + 월/일(아래, 예: 8/1), 선택되면 초록 배지로 강조된다 */
+function DateCell({ record, selected, onPress }) {
+  const { weekday, m, d } = parseDateKey(record.date);
+  return (
+    <TouchableOpacity style={styles.dateCell} activeOpacity={0.7} onPress={onPress}>
+      <View style={[styles.dateCellInner, selected && styles.dateCellInnerActive]}>
+        <Text style={[styles.dateCellWeekday, selected && styles.dateCellTextActive]}>{weekday}</Text>
+        <Text style={[styles.dateCellDay, selected && styles.dateCellTextActive]} numberOfLines={1}>{m}/{d}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * 루틴 이행률 한 줄 — 구간(좋음/주의 등) 없이 0~100% 그대로 채운다. 다 챙겼으면 막대가 끝까지
+ * 찬다. 다른 지표들(피부 질환 등)처럼 상태에 따라 색이 바뀌지 않고, 앱 전체가 쓰는 연두색
+ * (greenTop) 하나로 고정한다 — 이건 "좋다/나쁘다" 판정이 아니라 그냥 "얼마나 했는지"라서다.
+ */
+function AdherenceBar({ label, rate, first }) {
+  const pct = Math.round(rate * 100);
+  return (
+    <View style={[styles.adherenceRow, first && styles.adherenceRowFirst]}>
+      <View style={styles.adherenceHead}>
+        <Text style={styles.adherenceLabel} numberOfLines={1}>{label}</Text>
+        <Text style={styles.adherenceValue}>{pct}%</Text>
+      </View>
+      <View style={styles.adherenceTrack}>
+        <View style={[styles.adherenceFill, { width: `${pct}%` }]} />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * 경과 관찰 폴더 — 피부 장벽만 모으는 폴더(kind: 'barrier')는 그 전용 화면으로, 나머지는 피부 질환
+ * 폴더 화면으로 보낸다. 두 화면이 훅 구성이 달라서 한 컴포넌트 안에서 갈라 그리지 않는다.
+ */
+export default function MonitoringFolderScreen(props) {
+  const folder = useFolder(props.route?.params?.folderId);
+  return isBarrierFolder(folder) ? <BarrierFolderScreen {...props} /> : <DiseaseFolderScreen {...props} />;
+}
+
+/**
+ * 피부 장벽 폴더 — 피부 장벽만 잰 기록의 경과.
+ *
+ *   [피부 장벽 요약칸] [루틴 이행률 | 처음 → 지금 또래 상위 %]
+ *   [날짜 칸 + 피부 장벽 점수 꺾은선]  (y축은 기록 범위에 맞춰 확대 — 작은 오르내림도 보이게)
+ *   [피부 장벽 레이더 — 가운데 총점]
+ */
+function BarrierFolderScreen({ navigation, route }) {
   const { folderId } = route.params || {};
   const folder = useFolder(folderId);
-  const [zoomRecord, setZoomRecord] = useState(null);
-  const [zoomPage, setZoomPage] = useState(0);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [pickingBase, setPickingBase] = useState(false);
-  // 이 폴더가 지켜보는 자리가 넓이를 잴 수 있는 곳인지 — 촬영 화면과 **같은 판단**을 쓴다.
-  const { findTarget } = useMonitoring();
-  const areaPart = findTarget(folder?.targetId)?.part;
-  const areaTrackable = areaPart ? supportsAreaTracking(areaPart) : false;
-  const [areaCardW, setAreaCardW] = useState(0);
-  const [selectedId, setSelectedId] = useState(null);
+  const { adherenceRate } = useRoutines();
+  const scrollRef = useRef(null);
+  const scrolledToEndRef = useRef(false);
+  const [selectedId, setSelectedId] = useState(() => {
+    const recs = folder?.records;
+    return recs && recs.length ? recs[recs.length - 1].id : null;
+  });
 
   if (!folder || folder.records.length === 0) {
     return (
@@ -180,17 +236,27 @@ export default function MonitoringFolderScreen({ navigation, route }) {
   }
 
   const records = folder.records;
-  const baseIdx = baseIndexOf(folder);
-  const base = records[baseIdx];
-  const selectedRecord = records.find((r) => r.id === selectedId) || records[records.length - 1];
-  // 4가지 증상·IGA 모델은 아토피피부염 채점 기준이라, 이 폴더의 진단명이 그게 아니면 판정·상세를 숨긴다.
-  const hasSeverity = folderHasSeverity(folder);
-  const overlay = selectedRecord.overlay;
-  const skinDisplay = DISPLAY_SCALE.iga(selectedRecord.iga);
-  const verdicts = AXES.map((axis) => ({ axis, verdict: axisVerdict(axisPoints(records, baseIdx, axis)) }));
-  const afterBase = records.slice(baseIdx);
+  const selected = records.find((r) => r.id === selectedId) || records[records.length - 1];
+  const scan = selected.skinScan;
+  const score = scan?.totalScore != null ? Math.round(scan.totalScore) : null;
+  const barrier = score != null ? skinBarrierInfo(score, scan.ageGroup) : null;
 
-  const openZoom = (page) => { setZoomPage(page); setZoomRecord(selectedRecord); };
+  // 처음 기록 → 지금 고른 날짜의 또래 상위 % (점수가 오르면 개선)
+  const firstScan = records.find((r) => r.skinScan?.totalScore != null)?.skinScan ?? null;
+  const fromPct = firstScan ? topPctText(totalTopPct(firstScan.totalScore, firstScan.ageGroup)) : null;
+  const toPct = score != null ? topPctText(totalTopPct(score, scan.ageGroup)) : null;
+  const delta = firstScan && score != null ? score - Math.round(firstScan.totalScore) : null;
+
+  const [fy, fm, fd] = folder.startDate.split('-').map(Number);
+  const folderStart = new Date(fy, fm - 1, fd);
+  const bt4Rate = adherenceRate('BT4 Complex', folderStart, new Date());
+  const patchRate = adherenceRate('음압 패치', folderStart, new Date());
+
+  const selectRecord = (r) => {
+    setSelectedId(r.id);
+    const idx = records.findIndex((x) => x.id === r.id);
+    if (idx >= 0) scrollRef.current?.scrollTo({ x: Math.max(0, idx * POINT_W - POINT_W), animated: true });
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -202,98 +268,437 @@ export default function MonitoringFolderScreen({ navigation, route }) {
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body}>
-        {hasSeverity ? (
-          <View style={[monitoringCard(), styles.card]}>
-            <View style={styles.headRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.eyebrow}>부위 상세 (부위 단위)</Text>
-                <Text style={styles.siteName}>{folder.name}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setPickingBase((v) => !v)} activeOpacity={0.7}>
-                <Text style={styles.baseText}>
-                  기준일 {fmtShort(base.date)} · <Text style={styles.baseChange}>변경</Text>
-                </Text>
-              </TouchableOpacity>
-            </View>
+        {/* 요약 — 지표가 하나뿐이라 요약칸 네 개 대신 가로로 긴 카드 한 장 (같은 아이콘·글귀·배지) */}
+        <View style={[monitoringCard(14), styles.barrierSummary]}>
+          <View style={[styles.summaryIconCircle, { backgroundColor: BARRIER_SERIES.color }]}>
+            <Image source={BARRIER_ICON} style={{ width: 24, height: 24 }} resizeMode="contain" />
+          </View>
+          <Text style={styles.barrierSummaryLabel}>피부 장벽</Text>
+          <Text style={styles.barrierSummaryValue}>{score != null ? score : '-'}</Text>
+          <View style={{ flex: 1 }} />
+          <View style={[styles.summaryPill, styles.barrierSummaryPill, { backgroundColor: barrier ? barrier.color : mc.navInactive }]}>
+            <Text style={[styles.summaryPillText, styles.barrierSummaryPillText, { color: '#fff' }]} numberOfLines={1}>
+              {barrier ? barrier.ko : '미측정'}
+            </Text>
+          </View>
+        </View>
 
-            {pickingBase && (
-              <View style={styles.basePicker}>
-                {records.map((r) => (
-                  <TouchableOpacity
-                    key={r.id}
-                    style={[styles.baseOption, r.id === base.id && styles.baseOptionOn]}
-                    onPress={() => { setFolderBaseline(folder.id, r.id); setSelectedId(null); setPickingBase(false); }}
-                  >
-                    <Text style={[styles.baseOptionText, r.id === base.id && { color: mc.greenDeep }]}>{fmtShort(r.date)}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+        {/* 경과추적 카드 — 피부 질환 폴더 페이지와 같은 카드(왼쪽 루틴 이행률, 오른쪽 처음 대비 변화).
+            오른쪽은 지표가 장벽 하나라 한 줄: "장벽 ▲개선" + "상위 97% → 상위 3%". */}
+        <View style={[monitoringCard(), styles.metricCard]}>
+          <View style={styles.progressRow}>
+            {(bt4Rate != null || patchRate != null) && (
+              <>
+                <View style={[styles.progressCol, styles.progressColLeft]}>
+                  {bt4Rate != null && <AdherenceBar label="BT4 Complex 이행률" rate={bt4Rate} first />}
+                  {patchRate != null && <AdherenceBar label="음압 패치 이행률" rate={patchRate} first={bt4Rate == null} />}
+                  <View style={styles.adherenceEncourageBox}>
+                    <Text style={styles.adherenceEncourage}>
+                      {delta != null && delta > 0
+                        ? '처음 기록 대비 피부 장벽 점수가 높아졌네요.\n루틴 잊지 말고 꾸준히 이어가 보세요.'
+                        : '루틴 잊지 말고 꾸준히 이어가 보세요.'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.progressDivider} />
+              </>
             )}
-
-            <View style={styles.chipRow}>
-              {verdicts.map(({ axis, verdict }) => <VerdictChip key={axis.key} label={axis.label} verdict={verdict} />)}
+            <View style={[styles.progressCol, { justifyContent: 'center' }]}>
+              <TrendMini label="장벽" delta={delta} fromBand={fromPct} toBand={toPct} noneText="미측정" first />
             </View>
+          </View>
+        </View>
 
-            {afterBase.length < 2 ? (
-              <Text style={styles.hint}>기준일 한 장뿐이라 아직 비교할 수 없어요. 다시 촬영하면 변화를 알려드려요.</Text>
-            ) : (
-              <ProgressGraphs records={records} baseIdx={baseIdx} selectedId={selectedRecord.id} onSelect={(r) => setSelectedId(r.id)} />
-            )}
+        {/* 날짜 칸 + 피부 장벽 점수 꺾은선 — 같은 가로 스크롤 하나에 놓여 날짜와 점이 맞물린다.
+            y축 숫자는 스크롤 밖 왼쪽에 고정한다(질환 폴더 그래프와 같은 배치). */}
+        <View style={[monitoringCard(), styles.card]}>
+          <View style={styles.dateStripHeader}>
+            <Text style={{ fontSize: 15 }}>📅</Text>
+            <Text style={styles.dateStripRange}>
+              {fmtFull(records[0].date)} - {fmtFull(records[records.length - 1].date)}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row' }}>
+            <View style={{ width: Y_AXIS_W }}>
+              <View style={{ height: DATE_ROW_H }} />
+              <BarrierScoreYAxis records={records} chartHeight={BARRIER_CHART_H} />
+            </View>
+            <ScrollView
+              ref={scrollRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ flex: 1 }}
+              onContentSizeChange={() => {
+                if (!scrolledToEndRef.current) {
+                  scrolledToEndRef.current = true;
+                  scrollRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
+            >
+              <View style={{ width: chartContentWidth(records.length) }}>
+                <View style={[styles.dateCellRow, { height: DATE_ROW_H }]}>
+                  {records.map((r) => (
+                    <DateCell key={r.id} record={r} selected={r.id === selected.id} onPress={() => selectRecord(r)} />
+                  ))}
+                </View>
+                <BarrierScoreChart
+                  records={records}
+                  chartHeight={BARRIER_CHART_H}
+                  selectedId={selected.id}
+                  onSelect={selectRecord}
+                  color={BARRIER_SERIES.color}
+                />
+              </View>
+            </ScrollView>
+          </View>
+          <View style={styles.cardHeadRow}>
+            <Text style={styles.cardTitle}>피부 장벽 점수 변화</Text>
+            <Text style={styles.cardSub}>총 {records.length}회 측정</Text>
+          </View>
+        </View>
+
+        {scan ? (
+          <View style={{ marginBottom: -14 }}>
+            <ScanRadarCard title="피부 장벽" icon={DETAIL_ICONS.barrier} result={scan} centerScore={scan.totalScore} />
           </View>
         ) : (
-          <View style={[monitoringCard(), styles.card]}>
-            <Text style={styles.siteName}>{folder.name}</Text>
-            <Text style={styles.hint}>이 질환은 증상 변화 판정을 지원하지 않아요. 사진으로 경과를 확인해 주세요.</Text>
+          <EmptyMetricCard label="피부 장벽" text="미측정" icon={DETAIL_ICONS.barrier} />
+        )}
+
+        {/* 수분량 — 피부 장벽 측정 결과 상세 페이지의 수분량 상자 그대로(고른 날짜의 값) */}
+        {scan?.metrics
+          ?.filter((m) => m.key === 'moisture')
+          .map((m) => (
+            <View key={m.key} style={{ marginBottom: -14 }}>
+              <MoistureBox metric={m} />
+            </View>
+          ))}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function DiseaseFolderScreen({ navigation, route }) {
+  const { folderId } = route.params || {};
+  const folder = useFolder(folderId);
+  const [zoomRecord, setZoomRecord] = useState(null);
+  const [zoomPage, setZoomPage] = useState(0);
+  const { healthConnected } = useProfile();
+  const { adherenceRate } = useRoutines();
+  // 이 폴더가 지켜보는 자리가 넓이를 잴 수 있는 곳인지 — 촬영 화면과 **같은 판단**을 쓴다.
+  // 대상을 못 찾으면 잴 수 없는 것으로 본다 (기본값을 부위 하나로 두면 그 부위가 측정 가능해지는
+  // 순간 "못 잰다"가 "잰다"로 조용히 뒤집힌다).
+  const { findTarget } = useMonitoring();
+  const areaPart = findTarget(folder?.targetId)?.part;
+  const areaTrackable = areaPart ? supportsAreaTracking(areaPart) : false;
+  /** 넓이 카드의 SVG는 픽셀 폭이 필요하다(퍼센트로 못 그린다) — 실제로 차지한 폭을 재서 넘긴다 */
+  const [areaCardW, setAreaCardW] = useState(0);
+  // 날짜 칸 줄과 그래프가 같은 가로 스크롤 하나를 공유한다(아래 참고) — 처음 열렸을 때(또는 새로
+  // 촬영해 기록이 늘었을 때) 오른쪽 끝(오늘)으로 자동 스크롤하기 위한 참조.
+  const scrollRef = useRef(null);
+  const scrolledToEndRef = useRef(false);
+  // 그래프 영역(graphRow)이 실제로 차지한 높이 — 여기서 DATE_ROW_H(고정값)를 빼면 그래프 자체에
+  // 줄 수 있는 높이가 나온다. 화면 아래까지 이 카드가 남는 공간을 전부 채우도록 페이지 자체는
+  // 스크롤하지 않는다.
+  const [graphRowH, setGraphRowH] = useState(0);
+  // 지금 선택된 날짜 — 기본은 가장 최근 기록(맨 오른쪽). 그래프 포인트나 날짜 칸을 탭하면 바뀐다.
+  const [selectedId, setSelectedId] = useState(() => {
+    const recs = folder?.records;
+    return recs && recs.length ? recs[recs.length - 1].id : null;
+  });
+
+  // 기록이 하나도 없는 폴더는 만들어지지 않지만(폴더 생성과 첫 기록이 한 번에 일어난다),
+  // 아래 계산이 전부 "기록이 최소 하나"를 전제하므로 방어적으로 함께 막는다.
+  if (!folder || folder.records.length === 0) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Text style={{ padding: 20, color: mc.sub }}>폴더를 찾을 수 없습니다.</Text>
+      </SafeAreaView>
+    );
+  }
+
+  const records = folder.records;
+  const total = records.length;
+  const contentWidth = chartContentWidth(total);
+  // [분리판] 피부 장벽 띠를 그리지 않으므로 그 높이만큼 빼지 않는다
+  const graphH = graphRowH > 0 ? Math.max(60, graphRowH - DATE_ROW_H) : GRAPH_H_DEFAULT;
+  const selectedRecord = records.find((r) => r.id === selectedId) || records[records.length - 1];
+  // 4가지 증상·IGA 모델은 아토피피부염 채점 기준이라, 이 폴더의 진단명이 그게 아니면 "피부 종합
+  // 상태"·"4가지 증상"을 요약칸·그래프·상세 카드 어디에도 보여주지 않는다.
+  const hasSeverity = folderHasSeverity(folder);
+  const chartSeries = hasSeverity ? ['skin', 'itch', 'sleep'] : ['itch', 'sleep'];
+  /*
+    이 회차의 병변 오버레이. 실제 촬영은 분석이 합성한 것을 저장하고(recordExam의 maskUri),
+    데모 기록은 미리 구운 에셋을 쓴다(tools/bake_dump_overlays.py) — 둘 다 진짜 세그 결과다.
+    없으면 null이고, 그때 화면은 원본 사진을 그대로 보여준다.
+  */
+  const overlay = selectedRecord.overlay;
+  const skinDisplay = DISPLAY_SCALE.iga(selectedRecord.iga);
+  const itchDisplay = DISPLAY_SCALE.itch(selectedRecord.itchVas);
+  // 수면 점수는 스마트워치(Samsung Health) 연동 값이라, 미연동이면 "미기재"로 비워 둔다
+  const sleep = healthConnected ? sleepBand(selectedRecord.sleepScore) : null;
+  const itch = itchBand(itchDisplay);
+  const skin = skinConditionInfo(skinDisplay); // 그래프와 같은 0~100 표시값 기준
+  // [분리판] 피부 장벽은 피부 장벽 폴더(BarrierFolderScreen)에서만 다룬다 — 이 화면엔 장벽 칸이 없다
+
+  // 루틴 탭에서 체크한 기록을 이 자리를 지켜본 기간(첫 기록 ~ 오늘) 동안 얼마나 챙겼는지로 환산한다.
+  const [fy, fm, fd] = folder.startDate.split('-').map(Number);
+  const folderStart = new Date(fy, fm - 1, fd);
+  const bt4Rate = adherenceRate('BT4 Complex', folderStart, new Date());
+  const patchRate = adherenceRate('음압 패치', folderStart, new Date());
+
+  // 처음 기록 대비 지금 고른 날짜까지 몇 점 움직였는지 — 그래프 포인트나 날짜 칸을 탭해 다른 날을
+  // 고르면 이 값도 그 날짜 기준으로 다시 계산된다(요약 박스 값 자체가 selectedRecord 기준인 것과
+  // 같은 규칙). 화살표는 점수가 늘면 빨강, 줄면 파랑 — 증가/감소를 그대로 색으로 표시할 뿐 좋다/
+  // 나쁘다가 아니다.
+  const firstRecord = records[0];
+  const skinDelta = hasSeverity ? DISPLAY_SCALE.iga(selectedRecord.iga) - DISPLAY_SCALE.iga(firstRecord.iga) : null;
+  const itchDelta = DISPLAY_SCALE.itch(selectedRecord.itchVas) - DISPLAY_SCALE.itch(firstRecord.itchVas);
+  const sleepDelta = healthConnected ? selectedRecord.sleepScore - firstRecord.sleepScore : null;
+  // 이행률 카드 맨 아래 응원 문구용 — 위 지표 중 처음 기록보다 오른(▲) 항목이 몇 개인지 센다
+  const increasedCount = [skinDelta, itchDelta, sleepDelta].filter((d) => d != null && Math.round(d) > 0).length;
+  // TrendMini의 "나쁨 → 주의" 같은 등급 이동 표시용 — 처음 기록의 등급만 새로 구하면 된다
+  // (지금 등급은 위에서 이미 구해 둔 skin/itch/sleep 밴드를 그대로 쓴다).
+  const skinFromBand = hasSeverity ? skinConditionInfo(DISPLAY_SCALE.iga(firstRecord.iga)).ko : null;
+  const itchFromBand = itchBand(DISPLAY_SCALE.itch(firstRecord.itchVas)).ko;
+  const sleepFromBand = healthConnected ? sleepBand(firstRecord.sleepScore).ko : null;
+
+  /** 날짜를 선택하면(날짜 칸 탭이든 그래프 포인트 탭이든) 그 위치가 화면에 보이도록 스크롤한다 —
+   * 날짜 칸과 그래프가 같은 스크롤 안에 있어서 한 번만 스크롤하면 둘 다 함께 움직인다. */
+  const selectRecord = (r) => {
+    setSelectedId(r.id);
+    const idx = records.findIndex((x) => x.id === r.id);
+    if (idx < 0) return;
+    scrollRef.current?.scrollTo({ x: Math.max(0, idx * POINT_W - POINT_W), animated: true });
+  };
+
+  const openZoom = (page) => { setZoomPage(page); setZoomRecord(selectedRecord); };
+  const thumbSize = PHOTO_SIZE;
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.topBar}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+          <Text style={{ fontSize: 20, color: mc.ink }}>‹</Text>
+          <Text style={styles.topBarTitle} numberOfLines={1}>{plainSiteLabel(folder.name)}</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body}>
+        {/* 그래프에서 선택된 날짜의 값을 보여주는 요약 박스 3개 — 그래프 포인트를 탭하면 함께 바뀐다.
+            세 지표 모두 DISPLAY_SCALE로 0~100 표시값으로 맞춰서 같은 축·같은 기준으로 비교할 수 있다.
+            처음 기록 대비 증감은 여기 없다 — 아래 루틴 이행률 카드의 오른쪽 열에서 보여준다. */}
+        <View style={styles.summaryRow}>
+          {/*
+            홈 화면·기록 탭과 같은 형태(점수 + 중증도)로 맞춘다. IGA 채점은 아토피피부염
+            기준이라 다른 질환은 매길 점수가 없어 "준비중"으로 대신하고 배지도 뺀다.
+          */}
+          <SummaryBox
+            label="피부 질환"
+            value={hasSeverity ? skinDisplay : '준비중'}
+            pillText={hasSeverity ? skin.ko : undefined}
+            pillColor={hasSeverity ? skin.color : undefined}
+            icon={DISEASE_ICON}
+            circleColor={CHART_SERIES.skin.color}
+            iconSize={22}
+          />
+          <SummaryBox
+            label="가려움 안정도"
+            value={itchDisplay}
+            pillText={itch.ko}
+            pillColor={itch.color}
+            icon={ITCH_ICON}
+            circleColor={CHART_SERIES.itch.color}
+            iconSize={26}
+          />
+          <SummaryBox
+            label="수면 점수"
+            value={sleep ? selectedRecord.sleepScore : '-'}
+            pillText={sleep ? sleep.ko : '미기재'}
+            pillColor={sleep ? sleep.color : mc.navInactive}
+            icon={SLEEP_ICON}
+            circleColor={CHART_SERIES.sleep.color}
+            iconSize={32}
+          />
+        </View>
+
+        {/* 경과추적 카드 — 왼쪽은 루틴 탭에서 체크한 BT4 Complex·음압 패치를 이 자리를 지켜본 기간
+            (첫 기록~오늘) 동안 얼마나 챙겼는지 + 응원 문구, 오른쪽은 처음 기록 대비 지표별
+            개선/악화와 등급 이동을 보여준다. 응원 문구는 왼쪽 열 안에 있지만 오른쪽 열의 증감
+            (increasedCount)까지 가져와 둘을 이어서 보여준다. 등록된 적 없는 제품이면(이름이 안
+            맞으면) 그 막대는 아예 안 그린다. */}
+        {(bt4Rate != null || patchRate != null) && (
+          <View style={[monitoringCard(), styles.metricCard]}>
+            <View style={styles.progressRow}>
+              <View style={[styles.progressCol, styles.progressColLeft]}>
+                {bt4Rate != null && <AdherenceBar label="BT4 Complex 이행률" rate={bt4Rate} first />}
+                {patchRate != null && <AdherenceBar label="음압 패치 이행률" rate={patchRate} first={bt4Rate == null} />}
+                <View style={styles.adherenceEncourageBox}>
+                  {/* adjustsFontSizeToFit/minimumFontScale은 iOS·Android 전용이라 웹 프리뷰에서는
+                     안 먹거나 예상과 다르게 동작한다(상한을 올렸는데 오히려 작아지는 식) — 그래서
+                     확실히 동작하는 고정 크기로 되돌린다. */}
+                  <Text style={styles.adherenceEncourage}>
+                    {increasedCount > 0
+                      ? `처음 기록 대비 ${increasedCount}개 항목 점수가 높아졌네요.\n루틴 잊지 말고 꾸준히 이어가 보세요.`
+                      : '루틴 잊지 말고 꾸준히 이어가 보세요.'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.progressDivider} />
+              <View style={styles.progressCol}>
+                {hasSeverity && (
+                  <TrendMini label="질환" delta={skinDelta} fromBand={skinFromBand} toBand={skin.ko} first />
+                )}
+                <TrendMini
+                  label="가려움"
+                  delta={itchDelta}
+                  fromBand={itchFromBand}
+                  toBand={itch.ko}
+                  first={!hasSeverity}
+                />
+                <TrendMini
+                  label="수면"
+                  delta={sleepDelta}
+                  fromBand={sleepFromBand}
+                  toBand={sleep ? sleep.ko : null}
+                />
+              </View>
+            </View>
           </View>
         )}
 
-        {/* 병변 넓이 추이 — 임계값 캘리브레이션 전이라 SHOW_AREA_CARD로 화면에서만 내려 둔다 */}
+        {/* 날짜 + 변화 경과 그래프를 한 카드에 합쳤다. 맨 위에 촬영 기간 전체(첫 기록 ~ 마지막
+            기록)를 보여주고, 그 아래 날짜 칸 줄과 그래프가 같은 가로 스크롤 하나를 공유해서 항상
+            같은 x 위치로 맞물려 움직인다. 날짜 칸을 탭하거나 그래프 포인트를 탭하면(selectRecord)
+            선택된 날짜의 폭 전체가 회색 띠(그래프)·초록 배지(날짜 칸)로 함께 강조되고, 위 요약
+            박스 값도 갱신된다. 상세 결과로 넘어가는 길은 없다 — 아래 "피부 상태 상세 결과"에서
+            그대로 펼쳐 본다. "변화 경과" 제목·촬영 횟수·범례는 그래프 아래에 둔다. */}
+        <View style={[monitoringCard(), styles.card]}>
+          <View style={styles.dateStripHeader}>
+            <Text style={{ fontSize: 15 }}>📅</Text>
+            <Text style={styles.dateStripRange}>
+              {fmtFull(records[0].date)} - {fmtFull(records[records.length - 1].date)}
+            </Text>
+          </View>
+
+          <View style={styles.graphRow} onLayout={(e) => setGraphRowH(e.nativeEvent.layout.height)}>
+            <View style={styles.axisCol}>
+              <View style={{ height: DATE_ROW_H }} />
+              <TrendChartYAxis chartHeight={graphH} />
+            </View>
+            <ScrollView
+              ref={scrollRef}
+              horizontal
+              showsHorizontalScrollIndicator
+              style={styles.graphRegion}
+              onContentSizeChange={() => {
+                // 처음 열었을 때, 그리고 새로 촬영해 기록이 늘었을 때 항상 가장 최근(오늘) 기록이
+                // 보이도록 오른쪽 끝으로 스크롤한다(첫 진입만 자동으로, 이후엔 촬영 직후에만 명시적으로 호출됨)
+                if (!scrolledToEndRef.current) {
+                  scrolledToEndRef.current = true;
+                  scrollRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
+            >
+              <View style={{ width: contentWidth }}>
+                <View style={[styles.dateCellRow, { height: DATE_ROW_H }]}>
+                  {records.map((r) => (
+                    <DateCell key={r.id} record={r} selected={r.id === selectedRecord.id} onPress={() => selectRecord(r)} />
+                  ))}
+                </View>
+                <TrendChart
+                  records={records}
+                  chartHeight={graphH}
+                  selectedId={selectedRecord.id}
+                  onSelect={selectRecord}
+                  series={chartSeries}
+                />
+              </View>
+            </ScrollView>
+          </View>
+
+          <View style={styles.cardHeadRow}>
+            <Text style={styles.cardTitle}>변화 경과</Text>
+            <Text style={styles.cardSub}>총 {total}회 촬영</Text>
+          </View>
+          <TrendChartLegend series={chartSeries} />
+        </View>
+
+        {/*
+          병변 넓이 추이 — 넓이를 잴 수 있는 자리(얼굴·몸통)의 폴더에서만 나온다.
+
+          결합 그래프(TrendChart)에 못 올리는 값이라 카드를 따로 둔다: 넓이는 상한이 없고, 그날 한
+          장에서 읽는 값이 아니라 첫 촬영과 견줘야만 의미가 생긴다. 잴 수 없는 자리에서는 영영
+          채워지지 않을 카드를 띄우지 않는다.
+
+          ⚠️ SHOW_AREA_CARD로 **화면에서만** 잠시 내려 두었다. 임계값들이 아직 캘리브레이션 전이라
+             숫자가 흔들리는데, 여기 카드는 "얼굴의 12%"처럼 값을 정면으로 말하기 때문에 사용자가
+             그 흔들림을 병변의 변화로 읽는다. 측정·저장·전신 지도의 점선 원은 그대로 돈다 —
+             데이터가 쌓여야 임계값을 잡을 수 있고, 그러려면 계산은 계속돼야 한다.
+             다시 켤 때는 이 상수만 true로 되돌리면 된다.
+        */}
         {SHOW_AREA_CARD && areaTrackable && (
           <View onLayout={(e) => setAreaCardW(e.nativeEvent.layout.width)}>
+            {/* 위 날짜 띠에서 고른 회차의 넓이를 보여준다 — 다른 카드들과 같은 회차를 가리켜야 한다 */}
             <AreaTrendCard records={folder.records} width={areaCardW} selectedId={selectedRecord.id} />
           </View>
         )}
 
-        {/* 그래프에서 고른 날의 사진을 기준일 사진과 비교 */}
-        <PhotoCompare base={base} record={selectedRecord} />
-
-        {/* 고른 날의 촬영 이미지 — 원본/증상 부위 표시, 증상 레이어 칩 */}
-        <SymptomLayerPhoto
-          title={`${fmtFull(selectedRecord.date)} 촬영`}
-          photo={selectedRecord.photo}
-          overlay={overlay}
-          layers={selectedRecord.symptomOverlays}
-          values={selectedRecord}
-          size={PHOTO_SIZE}
-          onZoom={openZoom}
-        />
-
-        {/* 이번 촬영 상세 — 절대 등급과 증상별 강도는 접어 둔다 */}
-        {hasSeverity && (
-          <View style={[monitoringCard(), styles.card]}>
-            <TouchableOpacity style={styles.detailHead} activeOpacity={0.7} onPress={() => setDetailOpen((v) => !v)}>
-              <Text style={styles.cardTitle}>이번 촬영 상세 ({fmtShort(selectedRecord.date)})</Text>
-              <MaterialIcons name={detailOpen ? 'expand-less' : 'expand-more'} size={22} color={mc.sub} />
-            </TouchableOpacity>
-            {detailOpen && (
-              <View style={{ gap: 12, marginTop: 12 }}>
-                <MetricCard label="피부 종합 상태" value={skinDisplay} unit="/100" segments={SKIN_SEGMENTS} />
-                <SymptomGroupCard
-                  values={selectedRecord}
-                  onOpenInsight={(kind) => navigation.navigate(INSIGHT_ROUTE[kind], { folderId: folder.id })}
-                />
-                {SHOW_REGION_SYMPTOMS && selectedRecord.regions && selectedRecord.regions.length > 1 && (
-                  <RegionSymptomsCard photo={selectedRecord.photo} regions={selectedRecord.regions} />
-                )}
-              </View>
-            )}
+        {/* 선택된 날짜의 촬영 이미지 — 원본과 병변 마스크 오버레이를 나란히 보여준다. 사진을 탭하면
+            크게 확대해서 볼 수 있다(원본 탭 → 사진 페이지, 오버레이 탭 → overlay 페이지). */}
+        <View style={[monitoringCard(), styles.photoCard]}>
+          <View style={styles.photoCardHeader}>
+            <Text style={styles.photoCardTitle}>{fmtFull(selectedRecord.date)} 촬영</Text>
           </View>
+          <View style={styles.photoRow}>
+            <TouchableOpacity style={styles.photoCol} activeOpacity={0.85} onPress={() => openZoom(0)}>
+              <LesionThumb photo={selectedRecord.photo} mode="photo" size={thumbSize} />
+              <Text style={styles.photoCaption}>피부 질환 측정</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.photoCol} activeOpacity={0.85} onPress={() => openZoom(1)}>
+              <LesionThumb photo={selectedRecord.photo} overlay={overlay} mode="overlay" size={thumbSize} />
+              <Text style={styles.photoCaption}>증상 부위 표시</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* 선택된 날짜의 지표 네 가지 — 상세 결과 화면과 같은 카드(MetricCard)를 쓴다. 같은 값을
+            두 화면에서 다른 모양으로 보여주면 어느 쪽이 맞는지 헷갈린다. 위 요약 박스(SummaryBox)와
+            달리 여기는 4가지 증상까지 다 펼쳐 보여주는 상세 영역이라 몇 점 만점인지("/100")도
+            함께 적는다. */}
+        {hasSeverity && (
+          <>
+            <MetricCard label="피부 질환" value={skinDisplay} unit="/100" segments={SKIN_SEGMENTS} icon={DETAIL_ICONS.disease} />
+
+            <View style={[monitoringCard(), styles.metricCard]}>
+              <Text style={styles.metricCardLabel}>4가지 증상</Text>
+              {SYMPTOM_ORDER.map((key, i) => (
+                <MetricRow
+                  key={key}
+                  label={SYMPTOMS[key].label}
+                  value={DISPLAY_SCALE.symptom(selectedRecord[key])}
+                  segments={SYMPTOM_SEGMENTS_BASE}
+                  first={i === 0}
+                  hideValue
+                />
+              ))}
+            </View>
+          </>
+        )}
+
+        <MetricCard label="가려움 안정도" value={itchDisplay} unit="/100" segments={ITCH_SEGMENTS} icon={DETAIL_ICONS.itch} />
+
+        {healthConnected ? (
+          <MetricCard label="수면 점수" value={selectedRecord.sleepScore} unit="/100" segments={SLEEP_SEGMENTS} icon={DETAIL_ICONS.sleep} />
+        ) : (
+          <EmptyMetricCard label="수면 점수" text="미기재" icon={DETAIL_ICONS.sleep} />
         )}
       </ScrollView>
 
       <PhotoZoomModal
         visible={!!zoomRecord}
         record={zoomRecord}
+        /* 확대는 지금 고른 회차에서만 열리므로 그 회차의 오버레이를 그대로 넘긴다 */
         overlay={overlay}
         initialPage={zoomPage}
         onClose={() => setZoomRecord(null)}
@@ -302,65 +707,130 @@ export default function MonitoringFolderScreen({ navigation, route }) {
   );
 }
 
-const fmtShort = (dateKey) => {
-  const { m, d } = parseDateKey(dateKey);
-  return `${m}/${d}`;
-};
-
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: mc.bg },
+
+  // 피부 장벽 폴더 — 가로로 긴 요약 카드 한 장 (아이콘·글귀·배지는 요약칸과 같은 것)
+  barrierSummary: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 14 },
+  barrierSummaryLabel: { fontSize: 14, fontWeight: '700', color: mc.sub },
+  barrierSummaryValue: { fontSize: 24, fontWeight: '800', color: mc.ink },
+  barrierSummaryPill: { paddingHorizontal: 10, paddingVertical: 5 },
+  barrierSummaryPillText: { fontSize: 12.5 },
   topBar: {
     height: 56, flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', paddingHorizontal: 20, gap: 8,
     backgroundColor: mc.card, borderBottomWidth: 1, borderBottomColor: mc.line,
   },
   topBarTitle: { fontSize: 15, fontWeight: '700', color: mc.ink, flexShrink: 1 },
+  body: { padding: 12, gap: 12, paddingBottom: 24 },
+  summaryRow: { flexDirection: 'row', gap: 6 },
+  summaryBox: {
+    flex: 1, paddingVertical: 9, paddingHorizontal: 5,
+    alignItems: 'center', gap: 4,
+  },
+  summaryIconCircle: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  summaryLabelSlot: { height: 18, justifyContent: 'center', alignSelf: 'stretch' },
+  summaryLabel: { fontSize: 12.5, lineHeight: 16, color: mc.sub, fontWeight: '700', textAlign: 'center' },
+  summaryValueRow: { flexDirection: 'row', alignItems: 'flex-end' },
+  summaryValue: { fontSize: 22, fontWeight: '800', color: mc.ink },
+  /** 값 자리에 질환명이 올 때 — 숫자용 크기 그대로 두면 칸을 넘긴다 */
+  summaryValueText: { fontSize: 15 },
+  summaryPill: { borderRadius: 10, paddingHorizontal: 5, paddingVertical: 3, maxWidth: '100%' },
+  summaryPillText: { fontSize: 10.5, fontWeight: '800' },
+
+  dateStripHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dateStripRange: { fontSize: 14, fontWeight: '800', color: mc.ink },
+  dateCellRow: { flexDirection: 'row' },
+  dateCell: { width: DATE_CELL_W, alignItems: 'center', justifyContent: 'center' },
+  dateCellInner: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 4, borderRadius: 14, minWidth: 42 },
+  dateCellInnerActive: { backgroundColor: mc.greenTop },
+  dateCellWeekday: { fontSize: 11.5, fontWeight: '700', color: mc.sub },
+  dateCellDay: { fontSize: 14, fontWeight: '800', color: mc.ink, marginTop: 2 },
+  dateCellTextActive: { color: mc.greenDeep },
+
   card: { paddingVertical: 16, paddingHorizontal: 10 },
+  cardHeadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 6, marginTop: 14 },
+  cardTitle: { fontSize: 14, fontWeight: '800', color: mc.ink },
+  cardSub: { fontSize: 11, color: mc.sub, fontWeight: '600' },
+  graphRow: { height: GRAPH_ROW_H, flexDirection: 'row', marginTop: 10 },
+  axisCol: { width: Y_AXIS_W },
+  // 띠(16)보다 아이콘 원(22)이 조금 커서 위아래로 넘치게 둔다 — 띠 높이를 키우면 그래프 배치가 바뀐다
+  scanBandIconSlot: { alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  scanBandIcon: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  graphRegion: { flex: 1 },
+
+  photoCard: { padding: 14 },
+  photoCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  photoCardTitle: { fontSize: 13, fontWeight: '700', color: mc.sub },
+  photoRow: { flexDirection: 'row', justifyContent: 'center', gap: 14 },
+  photoCol: { alignItems: 'center' },
+  photoCaption: { fontSize: 10.5, color: mc.sub, marginTop: 6, textAlign: 'center' },
+
   metricCard: { padding: 16 },
   metricCardLabel: { fontSize: 16, fontWeight: '800', color: mc.ink, marginBottom: 12 },
-  regionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
-  regionRowDivider: { borderTopWidth: 1, borderTopColor: mc.line },
-  regionCropCol: { alignItems: 'center' },
-  regionCrop: {
-    width: REGION_CROP_SIZE, height: REGION_CROP_SIZE, borderRadius: 10, overflow: 'hidden', backgroundColor: mc.bg,
-  },
-  regionCropCaption: { fontSize: 10, color: mc.sub, marginTop: 4 },
-  regionChips: { flex: 1, gap: 6 },
-  symptomChipRow: { flexDirection: 'row', gap: 6 },
-  symptomChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, backgroundColor: mc.bg,
-    flexShrink: 1,
-  },
-  symptomChipOn: { backgroundColor: '#EDF7E1' },
-  symptomChipText: { fontSize: 11.5, fontWeight: '700', color: mc.sub },
-  symptomChipTextOn: { color: mc.greenDeep },
 
   // 경과추적 카드 — 왼쪽 이행률 열 / 오른쪽 개선·악화 열을 나란히 둔다
-  photoCard: { padding: 14 },
-  body: { padding: 12, gap: 12, paddingBottom: 24 },
-  fill: { width: '100%', height: '100%' },
-  cardTitle: { fontSize: 14, fontWeight: '800', color: mc.ink },
-  hint: { fontSize: 11.5, color: mc.sub, marginTop: 10 },
-  eyebrow: { fontSize: 11.5, color: mc.sub, fontWeight: '600' },
-  siteName: { fontSize: 20, fontWeight: '800', color: mc.ink, marginTop: 2 },
-  headRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  baseText: { fontSize: 11.5, color: mc.sub, fontWeight: '600' },
-  baseChange: { color: mc.greenMuted, fontWeight: '800', textDecorationLine: 'underline' },
-  basePicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  baseOption: { borderRadius: 10, borderWidth: 1, borderColor: '#E7E9EC', paddingHorizontal: 10, paddingVertical: 5 },
-  baseOptionOn: { backgroundColor: '#EDF7E1', borderColor: mc.greenTop },
-  baseOptionText: { fontSize: 12, fontWeight: '700', color: mc.sub },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 14 },
-  chip: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
-  chipPending: { borderStyle: 'dashed' },
-  chipText: { fontSize: 12, fontWeight: '600' },
-  chipVerdict: { fontWeight: '800' },
-  compareRow: { flexDirection: 'row', gap: 12, marginTop: 10 },
-  compareCol: { alignItems: 'center' },
-  compareFrame: { width: PHOTO_SIZE, height: PHOTO_SIZE, borderRadius: 12, overflow: 'hidden', backgroundColor: mc.bg },
-  caption: { fontSize: 10.5, color: mc.sub, marginTop: 6 },
-  detailHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-});
+  progressRow: { flexDirection: 'row', alignItems: 'stretch' },
+  progressCol: { flex: 1 },
+  // 응원 문구 박스는 왼쪽 열 안에서 줄바꿈만 안 되면 되고, 그 폭은 생각보다 적게 필요하다 —
+  // 2.8, 2.5까지 밀었다가 오른쪽 열("가려움" 라벨·"개선" 배지)이 좁아져 "개선…"처럼 잘리는
+  // 걸 보고서야 왼쪽에 여유가 넘치게 남아 있다는 걸 확인했다. 원래(2.4)보다도 더 줄인다 —
+  // 오른쪽이 우선이다(라벨·배지는 줄바꿈·말줄임 둘 다 안 되지만, 응원 문구는 줄바꿈만 막으면
+  // 되므로 좁은 폭에도 더 잘 견딘다).
+  progressColLeft: { flex: 2 },
+  progressDivider: { width: 1, backgroundColor: mc.line, marginHorizontal: 12 },
 
+  // 응원 문구 박스가 이 열 안으로 들어오면서 왼쪽 열이 고정 높이를 꽤 차지하게 됐다 — 오른쪽
+  // 열(개선율 3줄)과 세로 길이가 비슷해지도록 줄 사이를 조절한다.
+  adherenceRow: { marginTop: 18 },
+  adherenceRowFirst: { marginTop: 0 },
+  adherenceHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  adherenceLabel: { flex: 1, fontSize: 12, fontWeight: '800', color: mc.ink, marginRight: 4 },
+  adherenceValue: { fontSize: 12, fontWeight: '800', color: mc.greenDeep },
+  adherenceTrack: { height: 10, borderRadius: 5, backgroundColor: mc.line, overflow: 'hidden' },
+  adherenceFill: { height: '100%', borderRadius: 5, backgroundColor: mc.greenTop },
+  adherenceEncourageBox: {
+    marginTop: 16, borderRadius: 12, paddingHorizontal: 6, paddingVertical: 10,
+    backgroundColor: '#EDF7E1',
+  },
+  // fontSize는 adjustsFontSizeToFit의 상한이다 — 실제로 그려지는 크기는 그 컴포넌트가 이 폭·두
+  // 줄 안에서 찾아낸 "더 못 키우는 지점"이다. 상한을 넉넉히 높게 잡아 둬야(여기서는 18) 그
+  // 컴포넌트가 진짜 최대치까지 올라갈 여지가 생긴다 — 상한을 낮게 잡으면(예: 14) 실제로는
+  // 더 키울 폭이 남아 있어도 딱 그 값에서 멈춘다. lineHeight는 일부러 안 둔다 — 고정하면
+  // 자동으로 정해진 실제 글자 크기와 안 맞아 줄 간격이 어긋나 보인다.
+  // 18~20은(adjustsFontSizeToFit이 안 먹는 환경에서) 실제로 줄바꿈이 났다 — 지금 폭
+  // (progressColLeft: 2)에서 안전하게 확인됐던 원래 10보다 살짝 큰 값으로 되돌린다.
+  // 더 키우려면 이 값보다 progressColLeft를 먼저 넓혀야 한다(둘이 묶여 있다).
+  adherenceEncourage: { fontSize: 11, fontWeight: '700', color: mc.greenDeep, lineHeight: 15 },
+
+  // 오른쪽 열은 응원 문구 박스가 없어 왼쪽보다 짧게 끝난다 — 줄 사이를 벌려서
+  // 왼쪽 열과 세로 길이를 맞춘다(adherenceRow 참고).
+  trendMiniItem: { marginTop: 16 },
+  trendMiniItemFirst: { marginTop: 0 },
+  // 라벨은 왼쪽, 배지(개선/악화)는 오른쪽 끝 — 등급 이동 문구는 더 이상 이 줄에 같이 두지
+  // 않는다(아래 trendMiniBands 참고).
+  trendMiniHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // flex: 1을 쓰면 오른쪽 배지가 필요한 만큼 먼저 차지하고 남는 공간만 라벨에 주는데, 그 공간이
+  // 좁을 때 flex가 라벨을 눌러 접어(줄바꿈 이전에) numberOfLines가 "가..."로 잘라버린다. 라벨은
+  // "피부"·"가려움"·"수면" 중 가장 긴 것도 고정폭이면 충분하므로, flex 대신 그 폭을 그대로
+  // 확보해 둔다 — 오른쪽 내용과 폭을 다투지 않는다.
+  trendMiniLabel: { width: 44, fontSize: 12.5, fontWeight: '800', color: mc.ink, marginRight: 6 },
+  // 맨 아래 응원 문구 박스(adherenceEncourageBox)와 같은 연두색 — 두 요소가 한 카드 안에서
+  // 같은 "잘하고 있다" 색으로 이어져 보이게 한다.
+  trendMiniTagRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 2,
+    backgroundColor: '#EDF7E1', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3,
+  },
+  trendMiniArrow: { fontSize: 11, fontWeight: '800', color: mc.greenDeep },
+  trendMiniTag: { fontSize: 12.5, fontWeight: '800', color: mc.greenDeep },
+  /*
+    등급 이동("매우 나쁨 → 주의")은 trendMiniHead와 같은 줄이 아니라 그 아래, trendMiniItem
+    전체 폭을 혼자 쓰는 줄이다. 라벨(고정폭 44)과 폭을 나눠 쓸 때는 남는 자리가 좁아 "매우
+    나쁨"처럼 긴 등급 이름에서 오른쪽이 잘렸다 — 줄을 통째로 내리면 오른쪽 열 전체 폭을 다
+    쓸 수 있어 한 줄에 들어간다. textAlign: 'right'로 배지 바로 아래, 오른쪽 끝에 붙인다.
+  */
+  trendMiniBands: { fontSize: 10.5, color: mc.sub, marginTop: 4, textAlign: 'right' },
+});

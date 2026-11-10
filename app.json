@@ -1,12 +1,10 @@
 {
   "expo": {
     "name": "피부 케어",
-    "slug": "skin-care-app",
-    "owner": "ohhhhh",
+    "slug": "skin-care-app-expogo",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -46,20 +44,10 @@
           "photosPermission": "갤러리에서 병변 사진을 불러오기 위해 사진 접근 권한이 필요합니다."
         }
       ],
-      [
-        "react-native-fast-tflite",
-        {
-          "enableCoreMLDelegate": false,
-          "enableAndroidGpuLibraries": false
-        }
-      ],
       "expo-font",
-      "./plugins/withLargeHeap.js"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "52006d3c-57a1-4089-92ce-228facb859c1"
-      }
-    }
+      "expo-asset",
+      "expo-sharing",
+      "expo-status-bar"
+    ]
   }
 }

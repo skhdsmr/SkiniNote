@@ -1,20 +1,14 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  monitoringColors as mc, DISPLAY_SCALE,
-  SKIN_SEGMENTS, ITCH_SEGMENTS, SLEEP_SEGMENTS,
-} from '../theme';
-import { useFolder, folderHasSeverity } from '../store';
+import { monitoringColors as mc } from '../theme';
+import { useFolder, folderHasSeverity, isBarrierFolder } from '../store';
+import { SkinScanResultPage } from '../../screens/SkinScanScreen';
 import PhotoZoomModal from '../components/PhotoZoomModal';
-import { MetricCard, EmptyMetricCard } from '../../components/MetricCard';
-import SymptomGroupCard from '../../components/SymptomGroupCard';
-import SymptomLayerPhoto from '../../components/SymptomLayerPhoto';
-import { INSIGHT_ROUTE } from '../../symptoms/groups';
 import { useProfile } from '../../context/ProfileContext';
-
-const PAGE_PAD = 16;
-const PHOTO_SIZE = 96; // 휴대폰 화면 기준 작은 크기 — 두 장이 카드 하나 안에 나란히 들어간다
+import { plainSiteLabel } from '../../models';
+import { ExamRecordResultScreen } from '../../screens/ExamResultScreen';
+import { useMonitoring } from '../../context/MonitoringContext';
 
 function shortDate(dateKey) {
   const [y, m, d] = dateKey.split('-');
@@ -24,9 +18,9 @@ function shortDate(dateKey) {
 /**
  * 경과 관찰 상세 결과 — 하루치 기록 하나를 자세히 본다.
  *
- * 지표 카드(피부 종합 상태 · 증상 4종 · 가려움 · 수면 점수)는 피부 촬영 분석 결과 화면과 **같은**
- * 컴포넌트(MetricCard)를 쓴다. 같은 값을 두 화면에서 다른 모양으로 보여주면 어느 쪽이 맞는지
- * 헷갈리기 때문이다.
+ * 촬영 직후 결과 화면과 **똑같은 화면**으로 그린다 — 같은 결과를 두 모양으로 보여주면 어느 쪽이
+ * 맞는지 헷갈린다. 피부 장벽 기록은 SkinScanResultPage, 아토피(피부 질환) 기록은
+ * ExamRecordResultScreen(ExamResultScreen과 같은 부품).
  */
 export default function MonitoringDetailScreen({ navigation, route }) {
   const { folderId, recordId } = route.params || {};
@@ -35,89 +29,55 @@ export default function MonitoringDetailScreen({ navigation, route }) {
   const [zoomPage, setZoomPage] = useState(0);
   // 수면 점수는 스마트워치(Samsung Health) 연동으로 들어오는 값이라, 미연동이면 "미기재"로 둔다
   const { healthConnected } = useProfile();
+  const { findTarget } = useMonitoring();
   if (!folder) {
     return <SafeAreaView style={styles.container}><Text style={{ padding: 20, color: mc.sub }}>폴더를 찾을 수 없습니다.</Text></SafeAreaView>;
   }
 
   const record = folder.records.find((r) => r.id === recordId) || folder.records[folder.records.length - 1];
-  /*
-    이 회차의 병변 오버레이. 실제 촬영은 분석이 합성한 것을 저장하고(recordExam의 maskUri),
-    데모 기록은 미리 구운 에셋을 쓴다(tools/bake_dump_overlays.py) — 둘 다 진짜 세그 결과다.
-    없으면 null이고, 그때 화면은 원본 사진을 그대로 보여준다.
-  */
-  const overlay = record.overlay;
-
   // 4가지 증상·IGA 모델은 아토피피부염 채점 기준이라, 이 폴더의 진단명이 그게 아니면 두 카드 다 숨긴다
   const hasSeverity = folderHasSeverity(folder);
-  const skinValue = DISPLAY_SCALE.iga(record.iga); // 그래프·요약 박스와 같은 0~100 표시값
-  const itchValue = DISPLAY_SCALE.itch(record.itchVas);
 
   const openZoom = (page) => { setZoomPage(page); setZoomRecord(record); };
 
+  /*
+    피부 장벽만 잰 날(피부 장벽 폴더의 기록) — 홈 "피부 바로 스캔 → 피부 장벽 측정"의 결과 화면과
+    같은 페이지를 그날 기록으로 그린다(제목 아래 날짜, 지난 기록이라 다시 촬영은 없다).
+  */
+  if (isBarrierFolder(folder) && record.skinScan) {
+    // 피부 바로 스캔 결과와 같은 페이지 그대로 (덧붙이는 카드 없음 — 제목 아래 날짜만)
+    return (
+      <SkinScanResultPage
+        photo={record.skinScan.photo ?? record.photo}
+        result={record.skinScan}
+        subtitle={`${shortDate(record.date)} 기록`}
+        onClose={() => navigation.goBack()}
+      />
+    );
+  }
+
+  /*
+    아토피(피부 질환) 기록 — 촬영 직후 결과 화면(ExamResultScreen)과 같은 모양으로 그린다.
+    홈 "최근 ○○ 상태"·기록 탭·아토피 기록 어디서 들어와도 이 화면이다.
+  */
+  const target = folder.targetId ? findTarget(folder.targetId) : undefined;
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={{ fontSize: 20, color: mc.ink }}>‹</Text>
-          <View>
-            <Text style={styles.topBarTitle}>{shortDate(record.date)} 상세 결과</Text>
-            <Text style={styles.topBarSub} numberOfLines={1}>{folder.name}</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: PAGE_PAD, gap: 12, paddingBottom: 24 }}>
-
-        {/* 촬영 사진 — 원본과 증상 부위 표시를 작은 박스 하나 안에 나란히 보여주고, 아래 칩으로
-            증상별(홍반·구진·찰상·태선화) 검출 영역을 켜고 끈다. 탭하면 그 이미지가 바로 보이는
-            페이지로 크게 열린다. */}
-        <SymptomLayerPhoto
-          photo={record.photo}
-          overlay={overlay}
-          layers={record.symptomOverlays}
-          values={record}
-          size={PHOTO_SIZE}
-          onZoom={openZoom}
-        />
-
-        {hasSeverity && (
-          <>
-            {/* 1) 피부 종합 상태 — 이 상세 결과 페이지에서만 몇 점 만점인지("/100")를 값 옆에 적는다 */}
-            <MetricCard label="피부 종합 상태" value={skinValue} unit="/100" segments={SKIN_SEGMENTS} />
-
-            {/* 2) 증상 요약 — 4가지 증상을 염증 반응·긁은 흔적·만성 흔적 3묶음으로 보여준다 */}
-            <SymptomGroupCard
-              values={record}
-              onOpenInsight={(kind) => navigation.navigate(INSIGHT_ROUTE[kind], { folderId })}
-            />
-          </>
-        )}
-
-        {/* 3) 가려움 문진 (VAS 0~10 × 10 = 0~100 표시값) */}
-        <MetricCard label="가려움 안정도" value={itchValue} unit="/100" segments={ITCH_SEGMENTS} />
-
-        {/* 4) 수면 점수 (삼성헬스) — 스마트워치를 연동하지 않았으면 점수 대신 "미기재" */}
-        {healthConnected ? (
-          <MetricCard label="수면 점수" value={record.sleepScore} unit="/100" segments={SLEEP_SEGMENTS} />
-        ) : (
-          <EmptyMetricCard label="수면 점수" text="미기재" />
-        )}
-
-      </ScrollView>
-
+    <>
+      <ExamRecordResultScreen
+        record={record}
+        site={target ? plainSiteLabel(target.label) : plainSiteLabel(folder.name)}
+        disease={target?.diagnosis?.disease ?? folder.disease}
+        selfEntered={target?.diagnosis?.source === 'self'}
+        hasSeverity={hasSeverity}
+        healthConnected={healthConnected}
+        onClose={() => navigation.goBack()}
+        onPhotoPress={openZoom}
+      />
       <PhotoZoomModal visible={!!zoomRecord} record={zoomRecord} initialPage={zoomPage} onClose={() => setZoomRecord(null)} />
-    </SafeAreaView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: mc.bg },
-  topBar: {
-    height: 56, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', paddingHorizontal: 20,
-    backgroundColor: mc.card, borderBottomWidth: 1, borderBottomColor: mc.line,
-  },
-  topBarTitle: { fontSize: 15, fontWeight: '700', color: mc.ink },
-  topBarSub: { fontSize: 11, color: mc.sub, maxWidth: 160 },
-
 });

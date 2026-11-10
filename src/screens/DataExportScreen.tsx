@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppColors, cardDecoration } from '../theme';
 import { useFolders } from '../folders/store';
-import { DISPLAY_SCALE, skinConditionInfo } from '../folders/theme';
+import { DISPLAY_SCALE, skinConditionInfo, skinBarrierInfo } from '../folders/theme';
 import { plainSiteLabel } from '../models';
 import { useProfile } from '../context/ProfileContext';
 import { EXPORT_FIELDS, ExportField, ExportRecord, exportRecordsPdf } from '../records/pdfExport';
@@ -136,13 +136,22 @@ export default function DataExportScreen({ navigation }: { navigation: any }) {
                 {g.records.map((r) => {
                   const k = keyOf(g.id, r.id);
                   const skin = DISPLAY_SCALE.iga(r.iga);
+                  // 피부 장벽만 잰 기록은 피부 질환 값이 없다 — 그 줄에 피부 장벽 점수를 적는다
+                  const barrierScore = r.iga == null && r.skinScan?.totalScore != null ? Math.round(r.skinScan.totalScore) : null;
+                  const barrierBand = barrierScore != null ? skinBarrierInfo(barrierScore, r.skinScan.ageGroup) : null;
                   return (
                     <Pressable key={k} style={styles.recordRow} onPress={() => toggle(k)}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.recordDate}>{fmtDate(r.date)}</Text>
-                        <Text style={[styles.recordBand, { color: skinConditionInfo(skin).color }]}>
-                          피부 종합 상태 {Math.round(skin)} · {skinConditionInfo(skin).ko}
-                        </Text>
+                        {barrierBand ? (
+                          <Text style={[styles.recordBand, { color: barrierBand.color }]}>
+                            피부 장벽 {barrierScore} · {barrierBand.ko}
+                          </Text>
+                        ) : (
+                          <Text style={[styles.recordBand, { color: skinConditionInfo(skin).color }]}>
+                            피부 질환 {Math.round(skin)} · {skinConditionInfo(skin).ko}
+                          </Text>
+                        )}
                       </View>
                       <CheckBox on={picked.has(k)} />
                     </Pressable>

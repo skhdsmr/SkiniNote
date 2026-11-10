@@ -1,4 +1,5 @@
 import { loadTensorflowModel, type TensorflowModel } from 'react-native-fast-tflite';
+import { REMOTE_MODELS, remoteModel } from './remoteModel';
 
 /**
  * TFLite 모델을 불러오는 한 자리 — 캐시와 재시도를 여기서만 다룬다.
@@ -105,6 +106,8 @@ export function createModelSlot(label: string, source: () => unknown): ModelSlot
 }
 
 async function load(label: string, source: () => unknown): Promise<TensorflowModel> {
+  // Expo Go — 피부 질환 모델 3개는 서버에서 같은 .tflite를 돌린다 (remoteModel.ts)
+  if (REMOTE_MODELS.has(label)) return remoteModel(label);
   let lastError: unknown;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {

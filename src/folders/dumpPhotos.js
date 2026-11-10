@@ -4,8 +4,6 @@
  * - ATOPIC_PHOTOS / ATOPIC_OVERLAYS: 프리셋 폴더 "팔 건선" 전용
  * - CHEEK_PHOTOS  / CHEEK_OVERLAYS : 프리셋 폴더 "머리 주사"·"얼굴 아토피" 전용
  * - TORSO_PHOTOS  / TORSO_OVERLAYS : 프리셋 폴더 "몸통 아토피" 전용 (실사진 1장을 매 회차 재사용)
- * - ARM_PHOTOS    / ARM_OVERLAYS   : 프리셋 폴더 "팔 아토피" 전용 (실사진 1장을 매 회차 재사용)
- * - FACE_PHOTOS   / FACE_OVERLAYS  : 프리셋 폴더 "얼굴 아토피" 전용 (성인 얼굴(H1_300935_P1_L0), 실사진 1장을 매 회차 재사용)
  *
  * 오버레이는 **tools/bake_dump_overlays.py로 미리 구운 것**이다. 앱 안에서 그때그때 세그를
  * 돌려 보려 했지만, 데모 기록이 40장을 넘어 시작할 때 다 돌릴 수 없고 화면에 보일 때만 돌리면
@@ -85,23 +83,8 @@ export const TORSO_OVERLAYS = [
 ];
 
 /*
-  얼굴 아토피 폴더 — 성인 얼굴 실사진 1장(H1_300935_P1_L0)을 모든 회차에 재사용한다.
-  배열 길이가 1이라 store.js의 photoAt 나머지 연산이 항상 0번을 가리킨다(TORSO와 같은 방식).
-  오버레이도 이 한 장에서 구운 것 하나뿐이라 사진과 짝이 어긋나지 않는다.
+  피부장벽진단(얼굴 스캔) 덤프 사진 — 경과 관찰 기록의 skinScan.photo로 모든 회차가 같이 쓴다.
+  한국인 피부상태 측정 데이터 test/0001_01_F.jpg를 얼굴 전체가 들어오게 정사각형으로 자른 것
+  (원본의 눈 가림 막대 그대로). 실제 스캔 결과를 기록에 저장하게 되면 그 사진으로 바뀐다.
 */
-export const FACE_PHOTOS = [
-  require('../../assets/dump_photos/face/01.jpg'),
-];
-
-export const FACE_OVERLAYS = [
-  require('../../assets/dump_overlays/face/01.jpg'),
-];
-
-// 팔 아토피 폴더 — 실사진 1장을 모든 회차에 재사용한다(FACE와 같은 방식, 오버레이도 이 한 장에서 구움).
-export const ARM_PHOTOS = [
-  require('../../assets/dump_photos/arm/01.jpg'),
-];
-
-export const ARM_OVERLAYS = [
-  require('../../assets/dump_overlays/arm/01.jpg'),
-];
+export const FACE_PHOTO = require('../../assets/dump_photos/face/01.jpg');

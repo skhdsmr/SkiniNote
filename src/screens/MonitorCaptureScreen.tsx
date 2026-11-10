@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Ellipse } from 'react-native-svg';
 import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { AppColors } from '../theme';
@@ -270,8 +271,9 @@ const UNMEASURED_CONFIDENCE: SessionConfidence = {
  * 피부가 적게 담긴 사진은 분류 입력을 피부 쪽으로 좁혀(skinCropOf) 촬영이 아니라 후처리에서
  * 해결하고, 조명 차이는 게인으로 흡수한다(computeColorNormalization).
  *
- * 갤러리에서 고르는 길은 앞 단계(CaptureSourceScreen)에서 갈라진다. source='album'으로 들어오면
- * 카메라를 아예 켜지 않고 앨범만 연다 — 고를 사진에는 가이드가 낄 자리가 없기 때문이다.
+ * 촬영 방법을 따로 고르는 단계는 없다 — 카메라가 바로 뜨고, 셔터 왼쪽 "갤러리" 버튼으로 앨범 사진을
+ * 고른다(피부장벽측정 촬영 화면과 같은 배치). source='album'으로 들어오는 길은 남아 있어서, 그때는
+ * 카메라를 켜지 않고 앨범만 연다.
  *
  * 기준 사진을 프리뷰에 겹쳐 보여주던 고스트는 걷어냈다 — 반투명하게 깔린 지난 사진이 지금 피부와
  * 섞여 보여서, 정작 무엇을 찍고 있는지 알아보기 어려웠다. 기준 사진은 촬영 뒤 확인 화면에서
@@ -285,10 +287,16 @@ export default function MonitorCaptureScreen({
   source: initialSource,
   measureArea = true,
   ghostUri,
+  initialFacing = 'back',
+  faceGuide = false,
   onCancel,
   onComplete,
 }: {
   target: MonitorTarget;
+  /** 처음 켤 카메라 — 피부장벽측정(얼굴)은 전면으로 시작한다. 기본은 후면 */
+  initialFacing?: CameraType;
+  /** 얼굴 전체를 맞출 타원 가이드를 프리뷰에 겹친다 — 피부장벽측정(얼굴 정면) 전용 */
+  faceGuide?: boolean;
   /** 앞 단계(촬영 방법)에서 고른 방식 — 'album'이면 카메라를 켜지 않고 바로 갤러리를 연다 */
   source: PhotoSource;
   /**
@@ -332,13 +340,16 @@ export default function MonitorCaptureScreen({
   /** 직전 틱 프레임의 지문 — 화면이 멈췄는지는 프레임 사이에만 있는 정보라 여기 들고 있어야 한다 */
   const prevSig = useRef<Float32Array | null>(null);
   /** 등·목 뒤처럼 혼자 찍기 어려운 자리는 전면 카메라로 거울처럼 보며 찍는다 */
-  const [facing, setFacing] = useState<CameraType>('back');
+  const [facing, setFacing] = useState<CameraType>(initialFacing);
   /**
    * 네이티브 카메라가 다 살아났는지. 이게 켜지기 전에 takePictureAsync를 부르면 안 된다
    * (expo-camera 문서도 onCameraReady를 기다리라고 못박아 두고 있다) — 처음 들어왔을 때
    * 판정 루프가 통째로 죽어 있던 원인이 이것이었다.
    */
   const [cameraReady, setCameraReady] = useState(false);
+  /** CameraView를 다시 붙일 때 바꾸는 key — 준비 신호가 안 오면 카메라를 새로 띄운다 (아래 감시) */
+  const [cameraKey, setCameraKey] = useState(0);
+  const readyRetries = useRef(0);
   const [session, setSession] = useState<MonitorSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** 이번 사진의 출처 — 리뷰 화면이 "다시 촬영"과 "앨범에서 다시 고르기"를 갈라 보여준다 */
@@ -365,7 +376,6 @@ export default function MonitorCaptureScreen({
    * 옅게 깔고 끌 수 있게 두면 그 문제는 사용자가 그 자리에서 해결할 수 있다.
    */
   const [ghostOn, setGhostOn] = useState(true);
-  const [plainGhostOn, setPlainGhostOn] = useState(true);
 
   /**
    * 판정 결과 안내는 화면 대신 소리로 나간다. 매 틱마다 부르지만 같은 말을 반복하지 않도록
@@ -404,12 +414,6 @@ export default function MonitorCaptureScreen({
    */
   const scaleKind: ScaleKind | null =
     DUMP_RESULTS || scaleBroken || !measureArea ? null : scaleKindOf(target.part);
-  /*
-    자(얼굴·몸통)가 없는 부위(팔·다리 등)의 고스트 — 구도를 잴 방법이 없어 **눈으로 맞추는 용도뿐**이다.
-    위 ghost와 달리 정렬 게이트의 목표가 되지 않는다(맞출 기준이 없는데 판정만 바꾸면 안 된다).
-    그래서 자가 있는 부위는 ghost가, 없는 부위는 이 값이 맡는다 — 둘이 동시에 켜지는 일은 없다.
-  */
-  const plainGhostUri = !scaleKind && ghostUri ? ghostUri : null;
   /** 마지막 판정 프레임의 크기 — 화면 가이드를 프레임 좌표와 맞추는 데 쓴다 */
   const [frameSize, setFrameSize] = useState({ w: 0, h: 0 });
 
@@ -581,13 +585,27 @@ export default function MonitorCaptureScreen({
     }
   }, [commitPhoto, cameraReady]);
 
+  /** 앨범에서 한 장 골라 확정한다 — 골랐으면 true, 권한이 없거나 고르지 않고 닫으면 false */
   const pickFromAlbum = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
+    if (!perm.granted) return false;
     const picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
-    if (picked.canceled || !picked.assets[0]) return;
+    if (picked.canceled || !picked.assets[0]) return false;
     await commitPhoto(picked.assets[0].uri, 'album');
+    return true;
   }, [commitPhoto]);
+
+  /**
+   * 카메라 화면 아래 "갤러리" 버튼 (피부장벽측정 촬영 화면과 같은 배치).
+   * 앨범이 떠 있는 동안 뒤에서 자동 촬영이 셔터를 누르지 않게 먼저 멈추고,
+   * 고르지 않고 닫으면 다시 이어서 판정한다.
+   */
+  const openGallery = useCallback(async () => {
+    cancelled.current = true;
+    setArmed(false);
+    const committed = await pickFromAlbum();
+    if (!committed) cancelled.current = false;
+  }, [pickFromAlbum]);
 
   /**
    * 갤러리를 고르고 들어왔으면 화면을 띄우자마자 앨범을 연다 — 버튼을 한 번 더 누르게 할 이유가 없다.
@@ -608,10 +626,34 @@ export default function MonitorCaptureScreen({
     if (phase !== 'preview') setCameraReady(false);
   }, [phase]);
 
+  /*
+    준비 신호(onCameraReady) 감시. 촬영 방법 선택 단계를 없애면서 카메라가 탭을 여는 순간 바로
+    붙는데, 탭 초기화로 화면이 곧바로 한 번 더 붙으면 iOS에서 두 번째 카메라가 준비 신호를 영영
+    안 보내는 일이 있다 — 셔터가 "준비 중"에 멈춘다. 2.5초 안에 신호가 없으면 카메라를 새로 붙이고
+    (두 번까지), 그래도 없으면 셔터를 연다. 판정용 촬영은 자체 타임아웃(FRAME_TIMEOUT_MS)이 있어서
+    카메라가 정말 덜 살아났어도 루프가 멈추지 않는다.
+  */
+  useEffect(() => {
+    if (cameraReady) {
+      readyRetries.current = 0;
+      return;
+    }
+    if (mode !== 'camera' || phase !== 'preview' || !permission?.granted) return;
+    const t = setTimeout(() => {
+      if (readyRetries.current < 2) {
+        readyRetries.current += 1;
+        setCameraKey((k) => k + 1);
+      } else {
+        setCameraReady(true);
+      }
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [mode, phase, permission?.granted, cameraReady, cameraKey]);
+
   /** 프리뷰를 주기적으로 찍어 품질을 판정하고, 조건이 되면 자동으로 확정한다 */
   useEffect(() => {
-    // dump 모드에서는 판정할 모델이 없으므로 자동 셔터 루프를 아예 돌리지 않는다 (수동 촬영·앨범만 쓴다)
-    if (DUMP_RESULTS) return;
+    // dump 모드에서도 돌린다 — 피부·초점·노출 게이트는 Skia로 픽셀만 읽으므로 모델이 필요 없고,
+    // 자(얼굴 검출)는 위의 scaleKind에서 이미 꺼져 있다. 끄면 "자동으로 찍혀요" 안내만 남는다.
     if (mode !== 'camera') return; // 갤러리에서 고르는 흐름에는 판정할 프리뷰가 없다
     if (phase !== 'preview' || !permission?.granted) return;
     // 카메라가 다 살아난 뒤에 시작한다 — 그 전에 찍으면 응답이 오지 않아 루프가 멈춰 버린다
@@ -935,6 +977,7 @@ export default function MonitorCaptureScreen({
           알릴 일이 없으므로 끈다 — 실제 촬영 피드백은 화면이 확인/결과 단계로 넘어가는 것으로 충분하다.
         */}
         <CameraView
+          key={cameraKey}
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           facing={facing}
@@ -943,6 +986,13 @@ export default function MonitorCaptureScreen({
           // 카메라를 못 띄우면 판정 루프도 영영 못 돈다 — 조용히 회색 막대만 두지 않고 알린다
           onMountError={(e: any) => setLiveError(humanError(e, '카메라를 열지 못했어요'))}
         />
+
+        {/* 피부장벽측정 — 이마부터 턱까지 들어오게 맞추는 얼굴 타원 (예전 얼굴 촬영 화면과 같은 도형) */}
+        {faceGuide && (
+          <Svg style={StyleSheet.absoluteFill} viewBox="0 0 100 100" preserveAspectRatio="none" pointerEvents="none">
+            <Ellipse cx={50} cy={45} rx={31} ry={25} stroke="#FFFFFF" strokeWidth={0.5} strokeDasharray="2 1.5" fill="none" />
+          </Svg>
+        )}
 
         {/*
           넓이를 재는 자리에서만 나오는 가이드 도형.
@@ -978,18 +1028,6 @@ export default function MonitorCaptureScreen({
           가이드 도형은 고스트가 없을 때만 그린다. 둘을 함께 두면 맞출 목표가 둘이 되는데,
           정작 판정이 겨냥하는 것은 하나뿐이라 사용자는 반드시 틀린 쪽을 맞추게 된다.
         */}
-        {plainGhostUri && plainGhostOn && (
-          <Image
-            source={{ uri: plainGhostUri }}
-            style={[
-              StyleSheet.absoluteFill,
-              styles.ghost,
-              facing === 'front' && { transform: [{ scaleX: -1 }] },
-            ]}
-            resizeMode="cover"
-          />
-        )}
-
         {scaleKind && !(ghost && ghostOn) && (
           <ScaleGuideOverlay
             kind={scaleKind}
@@ -1014,8 +1052,6 @@ export default function MonitorCaptureScreen({
             ? `${scaleKind === 'face' ? '얼굴' : '양 어깨'}가 더 담겨야 넓이까지 기록돼요 — 조금 더 멀리서 잡거나, 아래 버튼을 눌러 그냥 찍어도 돼요`
             : ghost && ghostOn
               ? '지난 사진에 겹쳐 맞추면 넓이 변화를 정확히 볼 수 있어요'
-              : plainGhostUri && plainGhostOn
-                ? '지난 사진에 겹쳐 같은 자리를 맞춰 찍어보세요'
               : scaleKind === 'face'
                 ? '가이드에 얼굴을 맞추면 병변 넓이 변화까지 함께 볼 수 있어요'
                 : scaleKind === 'torso'
@@ -1047,31 +1083,20 @@ export default function MonitorCaptureScreen({
             <Text style={styles.soundBtnText}>겹쳐 보기 {ghostOn ? 'ON' : 'OFF'}</Text>
           </Pressable>
         )}
-        {plainGhostUri && (
-          <Pressable
-            style={[styles.ghostBtn, plainGhostOn && styles.soundBtnOn]}
-            onPress={() => setPlainGhostOn((v) => !v)}
-          >
-            <MaterialIcons name={plainGhostOn ? 'layers' : 'layers-clear'} size={16} color="#FFFFFF" />
-            <Text style={styles.soundBtnText}>겹쳐 보기 {plainGhostOn ? 'ON' : 'OFF'}</Text>
-          </Pressable>
-        )}
 
         {/*
           필수 조건 셋을 이름표 + 막대로 보여준다. 채워진 정도가 "얼마나 왔는지",
           색이 "통과했는지"다. 개발용 원시 측정값(선명도·정지·채널포화 …)은 걷어냈다 —
           숫자는 사용자가 할 수 있는 일을 알려주지 못한다.
         */}
-        {!DUMP_RESULTS && (
-          <View style={styles.statusPanel}>
-            {liveError && <Text style={styles.statusError}>판정 실패 · {liveError}</Text>}
-            <View style={styles.gaugeRow}>
-              <GateBar label="피부" value={live?.gauges.skin} ok={live?.hard.skin} />
-              <GateBar label="초점" value={live?.gauges.focus} ok={live?.hard.focus} />
-              <GateBar label="노출" value={live?.gauges.exposure} ok={live?.hard.exposure} />
-            </View>
+        <View style={styles.statusPanel}>
+          {liveError && <Text style={styles.statusError}>판정 실패 · {liveError}</Text>}
+          <View style={styles.gaugeRow}>
+            <GateBar label="피부" value={live?.gauges.skin} ok={live?.hard.skin} />
+            <GateBar label="초점" value={live?.gauges.focus} ok={live?.hard.focus} />
+            <GateBar label="노출" value={live?.gauges.exposure} ok={live?.hard.exposure} />
           </View>
-        )}
+        </View>
       </View>
 
       <View style={styles.bottomBar}>
@@ -1085,16 +1110,10 @@ export default function MonitorCaptureScreen({
             : '부위에 대고 잠깐 멈추면 자동으로 찍혀요. 직접 눌러도 돼요'}
         </Text>
         <View style={styles.bottomRow}>
-          <Pressable
-            style={styles.smallBtn}
-            onPress={() => {
-              // 카메라를 바꾸면 네이티브가 다시 올라온다 — 준비될 때까지 판정을 멈춘다
-              setCameraReady(false);
-              setFacing((f) => (f === 'back' ? 'front' : 'back'));
-            }}
-          >
-            <MaterialIcons name="flip-camera-android" size={20} color="#FFFFFF" />
-            <Text style={styles.smallBtnText}>{facing === 'back' ? '후면' : '전면'}</Text>
+          {/* 왼쪽 갤러리 · 가운데 셔터 · 오른쪽 카메라 전환 — 피부장벽측정 촬영 화면과 같은 배치 */}
+          <Pressable style={styles.smallBtn} onPress={openGallery}>
+            <MaterialIcons name="photo-library" size={20} color="#FFFFFF" />
+            <Text style={styles.smallBtnText}>갤러리</Text>
           </Pressable>
           {/* 조건이 맞으면 앱이 알아서 누르고, 그 전에도 직접 누를 수 있다 */}
           <Pressable
@@ -1108,8 +1127,17 @@ export default function MonitorCaptureScreen({
               {!cameraReady ? '준비 중' : '촬영'}
             </Text>
           </Pressable>
-          {/* 오른쪽은 비워 둔다 — 셔터가 화면 가운데에 오도록 (앨범 버튼이 있던 자리) */}
-          <View style={styles.smallBtnSpacer} />
+          <Pressable
+            style={styles.smallBtn}
+            onPress={() => {
+              // 카메라를 바꾸면 네이티브가 다시 올라온다 — 준비될 때까지 판정을 멈춘다
+              setCameraReady(false);
+              setFacing((f) => (f === 'back' ? 'front' : 'back'));
+            }}
+          >
+            <MaterialIcons name="flip-camera-android" size={20} color="#FFFFFF" />
+            <Text style={styles.smallBtnText}>{facing === 'back' ? '후면' : '전면'}</Text>
+          </Pressable>
         </View>
       </View>
     </View>

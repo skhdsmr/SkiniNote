@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Image } from 'react-native';
 import { useMonitoring } from '../context/MonitoringContext';
 import { getFolder } from '../folders/store';
 import { BodyModelId } from '../three/humanModel';
@@ -8,10 +7,9 @@ import { ExamCapture, ExamKind } from '../exam/examTypes';
 import { todayKey } from '../folders/store';
 import { getDayItch } from '../records/itchStore';
 import PartSelectScreen from './PartSelectScreen';
-import CaptureSourceScreen, { CaptureSource } from './CaptureSourceScreen';
 import MonitorCaptureScreen from './MonitorCaptureScreen';
 
-type Step = 'part' | 'source' | 'capture';
+type Step = 'part' | 'capture';
 
 /**
  * "피부 바로 스캔"이 쓰는 임시 자리.
@@ -70,9 +68,9 @@ export default function ExamFlow({
 }) {
   const isNew = kind === 'new';
   const isQuick = kind === 'quick';
-  const [step, setStep] = useState<Step>(isNew ? 'part' : 'source');
+  // 촬영 방법을 따로 고르지 않는다 — 카메라가 바로 뜨고, 그 아래 갤러리 버튼으로 앨범 사진을 고른다
+  const [step, setStep] = useState<Step>(isNew ? 'part' : 'capture');
   const modelId: BodyModelId = 'adultMale';
-  const [source, setSource] = useState<CaptureSource>('camera');
   const [target, setTarget] = useState<MonitorTarget | null>(presetTarget ?? (isQuick ? QUICK_TARGET : null));
   const { createTarget, findTarget } = useMonitoring();
 
@@ -90,20 +88,6 @@ export default function ExamFlow({
             있다(MonitoringContext의 createTarget 주석에 그 사이에서 무엇이 잘못됐었는지 적어 뒀다).
           */
           setTarget(createTarget(modelId, spot));
-          setStep('source');
-        }}
-      />
-    );
-  }
-
-  if (step === 'source') {
-    return (
-      <CaptureSourceScreen
-        // 단계가 하나뿐인 흐름(이어서 기록·바로 스캔)에는 "1 / 1"을 붙이지 않는다 — 셀 것이 없다
-        stepLabel={isNew ? '2 / 2' : undefined}
-        onBack={() => (isNew ? setStep('part') : onExit())}
-        onPick={(picked) => {
-          setSource(picked);
           setStep('capture');
         }}
       />
@@ -126,15 +110,11 @@ export default function ExamFlow({
     신규 기록에는 깔지 않는다 — 맞출 지난 사진이 아직 없고, 그 촬영이 곧 기준이 된다.
     폴더 기록에 사진이 없으면(옛 기록 등) 대상의 기준 세션 사진으로 물러선다.
   */
-  /*
-    기록의 photo는 실제 촬영이면 { uri }, 데모(dump) 기록이면 번들 에셋(require 결과, 숫자)이다 —
-    에셋은 uri로 풀어 줘야 프리뷰에 깔 수 있다.
-  */
-  const firstPhoto: any = folderId ? getFolder(folderId)?.records[0]?.photo : undefined;
-  const firstPhotoUri: string | undefined =
-    typeof firstPhoto === 'number' ? Image.resolveAssetSource(firstPhoto)?.uri : firstPhoto?.uri;
   const ghostUri =
-    kind === 'followUp' ? firstPhotoUri ?? current.baseline?.processedUri : undefined;
+    kind === 'followUp'
+      ? (folderId ? getFolder(folderId)?.records[0]?.photo?.uri : undefined) ??
+        current.baseline?.processedUri
+      : undefined;
 
   return (
     <MonitorCaptureScreen
@@ -145,8 +125,8 @@ export default function ExamFlow({
       */
       measureArea={!isQuick}
       ghostUri={ghostUri}
-      source={source}
-      onCancel={() => setStep('source')}
+      source="camera"
+      onCancel={() => (isNew ? setStep('part') : onExit())}
       onComplete={(processedUri, session) =>
         /*
           가려움은 이 촬영이 재는 값이 아니라 **그날 적어 둔 값**이라, 찍는 순간의 값을 그대로

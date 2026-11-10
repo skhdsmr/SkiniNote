@@ -6,6 +6,7 @@
  * 여기서 새로 정의하는 건 그 팔레트에 없던 4단계 중간색(warn) 하나와, 지표 스케일/구간 정의뿐이다.
  */
 import { AppColors, cardDecoration } from '../theme';
+import { topPctText, totalTopPct } from '../skinScan/api';
 
 export const monitoringColors = {
   ...AppColors,
@@ -29,23 +30,31 @@ export function monitoringCard(radius = 18) {
 
 /**
  * 모니터링 결합 그래프 지표별 고정 색상 — y축 하나(0~100)를 쓰는 꺾은선 콤보 차트.
- * 수면 점수 · 가려움 안정도 · 피부 종합 상태 모두 0~100 표시값(DISPLAY_SCALE 참고)으로
+ * 수면 점수 · 가려움 안정도 · 피부 질환 모두 0~100 표시값(DISPLAY_SCALE 참고)으로
  * 재스케일해서 같은 축, 같은 25/50/75/100 눈금 위에 세 꺾은선으로 겹쳐 그린다. 형태는 셋 다
  * 동일(line)하고 색으로만 구분한다 — 이 색은 그래프 꺾은선뿐 아니라, 모니터링 폴더 화면 상단
  * 요약칸의 원형 아이콘 배지 색에도 그대로 써서 "어느 꺾은선이 어느 항목인지"가 바로 이어져
  * 보이게 한다.
- *   - 피부 종합 상태: 코럴(주황빛 빨강)
+ *   - 피부 질환: 코럴(주황빛 빨강)
  *   - 가려움 안정도: 청록
  *   - 수면 점수: 남색
  */
 export const CHART_SERIES = {
   sleep: { key: 'sleepScore', label: '수면 점수', unit: '점', color: '#1E3A8A', shape: 'line' },
   itch: { key: 'itchVas', label: '가려움 안정도', unit: '점', color: '#0F9488', shape: 'line' },
-  skin: { key: 'iga', label: '피부 종합 상태', unit: '단계', color: '#E36657', shape: 'line' },
+  skin: { key: 'iga', label: '피부 질환', unit: '단계', color: '#E36657', shape: 'line' },
 };
 
 /**
- * 피부 종합 상태(IGA) · 가려움(VAS) · 세부 증상은 원래 스케일이 저마다 달라서(0~4, 0~10, 0~10)
+ * 피부 장벽(피부상태측정 종합 점수 — 주름·모공·수분) 지표의 고정 색.
+ * 결합 그래프에는 꺾은선이 아니라 별도 그라데이션 띠로 그려서 CHART_SERIES(꺾은선 목록)에는
+ * 넣지 않는다 — 넣으면 TrendChart가 꺾은선으로 하나 더 그린다. 요약칸 아이콘 원 배경색으로 쓴다.
+ * 코럴·청록·남색 사이에서 겹치지 않으면서 채도·명도가 비슷한 보라를 골랐다.
+ */
+export const BARRIER_SERIES = { label: '피부 장벽', color: '#7C5CC4' };
+
+/**
+ * 피부 질환(IGA) · 가려움(VAS) · 세부 증상은 원래 스케일이 저마다 달라서(0~4, 0~10, 0~10)
  * 화면에 보여줄 땐 모두 0~100으로 맞춘다 — 수면 점수(원래 0~100)와 같은 축·같은 분류 기준을
  * 쓰기 위해서다. 데이터는 원래 스케일 그대로 저장하고(모델이 실제로 내는 값 그대로), 화면에
  * 뿌리기 직전에만 이 식을 적용한다.
@@ -64,9 +73,9 @@ export const DISPLAY_SCALE = {
 };
 
 /**
- * 네 지표(피부 종합 상태 · 가려움 안정도 · 수면 점수 · 세부 증상 4종) 모두 같은 4단계 색과 "100점 =
+ * 네 지표(피부 질환 · 가려움 안정도 · 수면 점수 · 세부 증상 4종) 모두 같은 4단계 색과 "100점 =
  * 가장 좋음" 방향을 공유한다 — 좋음/없음(파랑) · 주의/미미함(노랑) · 나쁨/두드러짐(주황) ·
- * 매우 나쁨/뚜렷함(빨강). 이름은 지표마다 다르지만(피부 종합 상태·가려움 안정도·수면 점수는
+ * 매우 나쁨/뚜렷함(빨강). 이름은 지표마다 다르지만(피부 질환·가려움 안정도·수면 점수는
  * 좋음/주의/나쁨/매우 나쁨, 세부 증상은 없음/미미함/두드러짐/뚜렷함) 같은 4단계·같은 색이다.
  * 노랑과 주황(warn)은 바로 옆 단계라 헷갈리기 쉬워서, sev2(기존 3단계 중증도의 "중등증" 색,
  * #F2B33C)보다 더 옅은 전용 노랑(sevCaution)을 따로 쓴다.
@@ -74,14 +83,14 @@ export const DISPLAY_SCALE = {
  * 지표마다 "구간 목록"(SEGMENTS)을 정의해 둔다. 각 항목의 `to`는 그 구간의 위쪽 경계값(첫 구간의
  * 아래쪽 경계는 항상 0)이고, segmentFor는 배열 순서가 아니라 이 `to` 값으로 구간을 찾으므로 배열
  * 순서를 값 크기와 다르게 둬도 판정 로직은 그대로 맞는다 — 순서는 오직 ScaleBar가 막대를 왼쪽부터
- * 그리는 "시각적 배치"만 정한다. 피부 종합 상태·가려움 안정도·수면 점수 셋은 낮은 값(왼쪽)이
+ * 그리는 "시각적 배치"만 정한다. 피부 질환·가려움 안정도·수면 점수 셋은 낮은 값(왼쪽)이
  * 나쁨, 높은 값(오른쪽)이 좋음이라 색 순서가 같다(빨강 → 주황 → 노랑 → 파랑). 세부 증상
  * (SYMPTOM_SEGMENTS_BASE)만 그 반대로 배치해 뒀다 — 이유는 그쪽 주석 참고. 모두 DISPLAY_SCALE로
  * 환산한 뒤의 0~100 표시값 기준이다.
  */
 const LEVEL_COLORS = [monitoringColors.sev0, monitoringColors.sevCaution, monitoringColors.warn, monitoringColors.sev3];
 
-/** 피부 종합 상태 — 그래프·요약 박스에 쓰는 0~100 표시값(100 - IGA 기댓값 0~4 × 25) 기준 */
+/** 피부 질환 — 그래프·요약 박스에 쓰는 0~100 표시값(100 - IGA 기댓값 0~4 × 25) 기준 */
 export const SKIN_SEGMENTS = [
   { to: 12.6, ko: '매우 나쁨', color: LEVEL_COLORS[3] },
   { to: 37.6, ko: '나쁨', color: LEVEL_COLORS[2] },
@@ -110,7 +119,7 @@ export const SLEEP_SEGMENTS = [
  * (100 - 원래 0~10 × 10) 구간. 다른 지표와 같은 4단계·색이되, 세부 증상은 점수 대신 이 이름만
  * 보여준다(뚜렷함/두드러짐/미미함/없음 — 모델 등급 3/2/1/0 그대로).
  *
- * 다른 세 지표(피부 종합 상태·가려움 안정도·수면 점수)와 달리 **왼쪽이 좋음(없음), 오른쪽이
+ * 다른 세 지표(피부 질환·가려움 안정도·수면 점수)와 달리 **왼쪽이 좋음(없음), 오른쪽이
  * 나쁨(뚜렷함)**이다 — "증상이 없는 상태"를 왼쪽(시작점)에 두는 게 체크리스트처럼 더 자연스럽게
  * 읽혀서 이 지표만 배치를 반대로 뒀다. `to` 값은 그대로 두고 배열 순서만 바꿨다 — segmentFor는
  * 순서가 아니라 `to`로 구간을 찾으므로 판정에는 영향이 없다.
@@ -162,7 +171,7 @@ export function itchBand(displayVas) {
 }
 
 /**
- * 피부 종합 상태 — 그래프·요약 박스에 쓰는 0~100 표시값(IGA 기댓값 0~4 × 25, DISPLAY_SCALE.iga) 기준.
+ * 피부 질환 — 그래프·요약 박스에 쓰는 0~100 표시값(IGA 기댓값 0~4 × 25, DISPLAY_SCALE.iga) 기준.
  * 모델이 각 단계의 확률(P(0)~P(4))에 대한 기댓값을 출력하므로 실제 값은 1.7처럼 정수 사이
  * 소수도 나온다 — DISPLAY_SCALE.iga로 환산한 값을 그대로 이 함수에 넣어 4단계 중 어디에
  * 해당하는지만 고른다.
@@ -175,3 +184,69 @@ export function skinConditionInfo(displayValue) {
 export function symptomBand(displayValue) {
   return segmentFor(displayValue, SYMPTOM_SEGMENTS_BASE);
 }
+
+/**
+ * 피부상태측정(얼굴 스캔 — 주름·모공·수분, src/skinScan) 종합 점수 0~100 구간. 높을수록 좋다.
+ *
+ * 색 경향은 피부 질환(아토피 IGA)와 같다(매우 나쁨 빨강 → 나쁨 주황 → 주의 노랑 → 좋음 파랑).
+ * 다만 이 점수는 연속값이라, 경과 그래프 아래 띠는 구간마다 색을 딱 끊지 않고 scanGradientColor로
+ * 이어지게 섞어 그린다. 상세 카드(MetricCard)의 배지·막대는 다른 지표와 같이 이 구간으로 판정한다.
+ * ⚠️ 경계값(40/60/80)은 임의로 잡은 값이다.
+ */
+export const SKIN_SCAN_SEGMENTS = [
+  { to: 40, ko: '매우 나쁨', color: LEVEL_COLORS[3] },
+  { to: 60, ko: '나쁨', color: LEVEL_COLORS[2] },
+  { to: 80, ko: '주의', color: LEVEL_COLORS[1] },
+  { to: 100, ko: '좋음', color: LEVEL_COLORS[0] },
+];
+
+/**
+ * 피부 장벽 총점(50~100) → 배지. 좋음/주의 같은 단계 대신 같은 연령대(모르면 전체) 기준 피험자 중
+ * "상위 N%"로 적고, 색은 경과 그래프의 띠와 같은 그라데이션 색(scanGradientColor)을 쓴다.
+ */
+export function skinBarrierInfo(score, ageGroup) {
+  return { ko: `또래 ${topPctText(totalTopPct(score, ageGroup))}`, color: scanGradientColor(score) };
+}
+
+/*
+  피부 장벽 총점(50~100) 색 기준점 — 총점 공식과 같은 축(평균 75, 1SD = 7.5점)에 맞춘다.
+    60   (평균 −2SD) 빨강
+    67.5 (평균 −1SD) 주황
+    75   (평균)      연두
+    90   (평균 +2SD) 파랑
+  기준점 사이는 RGB로 선형 보간해서 점수가 1점만 달라도 색이 조금씩 바뀐다 (예: 75 → 90은 연두에서
+  파랑으로 서서히). 60 아래는 빨강, 90 위는 파랑 그대로다.
+*/
+const SCAN_COLOR_STOPS = [
+  { v: 60, color: LEVEL_COLORS[3] },
+  { v: 67.5, color: LEVEL_COLORS[2] },
+  { v: 75, color: AppColors.greenTop },
+  { v: 90, color: LEVEL_COLORS[0] },
+];
+
+const hexToRgb = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+const rgbToHex = (rgb) => `#${rgb.map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
+
+/** 피부상태측정 점수(0~100) → 연속 색. 단계 색 사이를 RGB로 선형 보간한다. */
+export function scanGradientColor(score) {
+  const stops = SCAN_COLOR_STOPS;
+  if (score <= stops[0].v) return stops[0].color;
+  if (score >= stops[stops.length - 1].v) return stops[stops.length - 1].color;
+  for (let i = 1; i < stops.length; i++) {
+    if (score <= stops[i].v) {
+      const a = stops[i - 1];
+      const b = stops[i];
+      const t = (score - a.v) / (b.v - a.v);
+      const ca = hexToRgb(a.color);
+      const cb = hexToRgb(b.color);
+      return rgbToHex(ca.map((c, k) => c + (cb[k] - c) * t));
+    }
+  }
+  return stops[stops.length - 1].color;
+}
+
+/** 범례용 — 피부 장벽 총점 범위(50~100) 전체를 왼쪽(낮음)부터 오른쪽(높음)까지 보여줄 때 쓰는 기준점 목록 */
+export const SCAN_LEGEND_STOPS = SCAN_COLOR_STOPS.map((s) => ({ offset: (s.v - 50) / 50, color: s.color }));

@@ -7,53 +7,43 @@ import { AppColors } from '../theme';
 import {
   monitoringColors as mc,
   monitoringCard,
+  DISPLAY_SCALE,
   ITCH_SEGMENTS,
   SKIN_SEGMENTS,
   SLEEP_SEGMENTS,
+  SYMPTOM_SEGMENTS_BASE,
 } from '../folders/theme';
 import { folderNameOf } from '../folders/targets';
 import { useLatestMonitoringRecord } from '../folders/store';
 import { plainSiteLabel } from '../models';
 import { LesionBox, LesionRegionResult } from '../ai/analyzeLocal';
 import { ExamAnalysis, ExamCapture } from '../exam/examTypes';
-import { DUMP_RESULTS } from '../exam/dumpAnalysis';
+import { DUMP_ANALYSIS } from '../exam/dumpAnalysis';
 import { igaDisplayValue, itchDisplayValue, SIGN_DISPLAY, SIGN_ORDER, signDisplayValue } from '../exam/examMetrics';
 import { useMonitoring } from '../context/MonitoringContext';
 import { useProfile } from '../context/ProfileContext';
-import { MetricCard, EmptyMetricCard } from '../components/MetricCard';
-import SymptomGroupCard from '../components/SymptomGroupCard';
-import SymptomLayerPhoto from '../components/SymptomLayerPhoto';
-import { SYMPTOM_GROUPS, type InsightKind, type SymptomKey } from '../symptoms/groups';
+import { MetricCard, MetricRow, EmptyMetricCard } from '../components/MetricCard';
+import { METRIC_ICONS } from '../components/metricIcons';
+import { ScanRadarCard } from './SkinScanScreen';
+import type { SkinScanResult } from '../skinScan/api';
+import { getDayItch } from '../records/itchStore';
+import { todayKey } from '../folders/store';
 
 /** 사용자가 직접 고를 수 있는 진단명 — 분류 모델의 클래스와 같은 집합에 "직접 입력"을 더한 것 */
 const DIAGNOSES = ['아토피피부염', '건선', '여드름', '주사', '지루', '직접 입력'];
 
 /**
- * 부위별 증상 카드를 화면에 보여줄지.
- *
- * false로 두면 **화면에서만 사라진다** — 판정 단위(regions) 계산과 카드 컴포넌트는 그대로 둔다.
- * 증상 요약(3묶음)과 사진의 증상 레이어가 같은 정보를 이미 보여줘서 일단 내려 두었다. 다시 켤 때는
- * 이 상수만 true로 되돌리면 된다(경과 관찰 폴더 화면의 같은 이름 상수도 함께).
+ * 부위별 증상 칩을 2×2로 고정 배치하기 위한 줄 나누기 — [피부 붉기, 오돌토돌함] / [긁은 상처,
+ * 피부 두꺼워짐]. flexWrap에 맡기면 칩 너비·화면 폭에 따라 한 줄에 3개+1개처럼 들쭉날쭉하게
+ * 잘려서, 항상 이 순서·이 줄 구성으로 보이도록 미리 2개씩 묶어 둔다.
  */
-const SHOW_REGION_SYMPTOMS = false;
-
-/**
- * 분석 결과의 sign 등급 → 기록 필드(0~10 스케일) 값. 증상 요약 카드·증상 레이어가 같은 값을 읽는다
- * (경과 관찰 기록에 저장되는 값과 같은 환산 — examMetrics.toFolderMetrics).
- */
-function symptomValuesOf(signs: { sign: (typeof SIGN_ORDER)[number]; grade: number }[]): Record<SymptomKey, number> {
-  const out: Record<SymptomKey, number> = { redness: 0, bumps: 0, scratch: 0, thickening: 0 };
-  signs.forEach((s) => {
-    out[SIGN_DISPLAY[s.sign].recordKey] = Math.round(signDisplayValue(s.sign, s.grade)) / 10;
-  });
-  return out;
-}
+const SIGN_ROWS = [SIGN_ORDER.slice(0, 2), SIGN_ORDER.slice(2, 4)];
 
 /**
  * 피부 촬영 분석 결과 화면.
  *
- *   신규·바로 스캔 — 사진 → 진단명 → 피부 종합 상태 → 증상 4종 → 가려움 → 사용한 제품
- *   이어서 기록   — 사진 → 피부 종합 상태 → 증상 4종 → 가려움
+ *   신규·바로 스캔 — 사진 → 진단명 → 피부 질환 → 증상 4종 → 가려움 → 사용한 제품
+ *   이어서 기록   — 사진 → 피부 질환 → 증상 4종 → 가려움
  *
  * 이어서 기록에서 진단명·사용한 제품 카드를 뺀 건, 이미 정해진 자리를 다시 찍는 것이라 매번
  * 다시 물을 것이 아니기 때문이다 — 진단명은 상단 제목에 이미 붙어 있고, 바꿀 일이 생기면 그
@@ -69,21 +59,25 @@ function symptomValuesOf(signs: { sign: (typeof SIGN_ORDER)[number]; grade: numb
 export default function ExamResultScreen({
   capture,
   analysis,
+  barrier = null,
   linkedFolder,
   onLink,
+  onLinkBarrier,
   onOpenFolder,
-  onOpenInsight,
   onOpenRecords,
   onClose,
 }: {
-  capture: ExamCapture;
-  analysis: ExamAnalysis;
+  /** 피부 질환 촬영 — 신규 증상 기록에서 피부 질환 측정을 넘어갔으면 null */
+  capture: ExamCapture | null;
+  analysis: ExamAnalysis | null;
+  /** 신규 증상 기록에서 함께 잰 피부 장벽 결과 — 없으면 피부 장벽 칸을 그리지 않는다 */
+  barrier?: { photoUri: string; result: SkinScanResult } | null;
   linkedFolder: { id: string; name: string } | null;
   /** 이 자리로 경과 관찰 폴더를 만들고 이번 기록을 첫 기록으로 넣는다. 만든(또는 이미 있던) 폴더 id를 그대로 돌려준다 */
   onLink: () => string;
+  /** 피부 장벽만 잰 신규 기록을 피부 장벽 폴더에 남긴다 — 폴더 id를 돌려준다 */
+  onLinkBarrier?: () => string;
   onOpenFolder: (folderId: string) => void;
-  /** 증상 묶음 버튼(트리거 탐정·긁기 패턴·회복 트래커)이 여는 특화 화면 */
-  onOpenInsight?: (folderId: string, kind: InsightKind) => void;
   /** 기록 탭으로 넘어간다 (저장은 이미 끝나 있다) */
   onOpenRecords: () => void;
   onClose: () => void;
@@ -92,28 +86,39 @@ export default function ExamResultScreen({
   const { findTarget, setDiagnosis } = useMonitoring();
   const { healthConnected } = useProfile();
   const latestSleep = useLatestMonitoringRecord();
-  const isQuick = capture.kind === 'quick';
-  const isNew = capture.kind === 'new';
-  const isFollowUp = capture.kind === 'followUp';
+  const hasDisease = !!capture && !!analysis;
+  const isQuick = capture?.kind === 'quick';
+  const isNew = capture?.kind === 'new';
+  const isFollowUp = capture?.kind === 'followUp';
 
   // 진단명을 결과 화면에서 고칠 수 있어서, 대상은 항상 저장소의 최신 상태를 읽는다
-  const target = findTarget(capture.target.id) ?? capture.target;
-  const disease = target.diagnosis?.disease;
-  const skinValue = igaDisplayValue(analysis.local.igaGrade);
-  const symptomValues = useMemo(() => symptomValuesOf(analysis.local.signs), [analysis]);
-  // 특화 화면(트리거 탐정 등)은 지켜보는 자리의 기록이 쌓여야 의미가 있다 — 폴더가 이미 있을 때만 연다
-  const openInsight = linkedFolder && onOpenInsight ? (kind: InsightKind) => onOpenInsight(linkedFolder.id, kind) : undefined;
+  const target = capture ? findTarget(capture.target.id) ?? capture.target : null;
+  const disease = target?.diagnosis?.disease;
+  const skinValue = analysis ? igaDisplayValue(analysis.local.igaGrade) : 0;
+  // 가려움은 그날 적어 둔 값 — 피부 질환 촬영을 넘어갔으면 오늘 값을 직접 읽는다
+  const itchVas = capture ? capture.itchVas : getDayItch(todayKey());
 
-  // 하단 버튼 문구 — 신규는 "만들 폴더 이름", 이어서 기록은 "이미 있는 폴더 이름"을 그대로 보여준다
-  const footerLabel = isQuick
+  // 하단 버튼 문구 — 신규는 "만들 폴더 이름", 이어서 기록은 "이미 있는 폴더 이름"을 그대로 보여준다.
+  // 피부 질환을 넘어가 피부 장벽만 쟀으면 폴더를 만들 자리(부위)가 없어 닫기만 남는다.
+  const footerLabel = !hasDisease
+    ? linkedFolder
+      ? `“${linkedFolder.name}” 경과 보기`
+      : barrier && onLinkBarrier
+        ? '“피부 장벽” 경과 폴더에 저장'
+        : '닫기'
+    : isQuick
     ? '닫기'
-    : isNew
+    : isNew && target
       ? `“${folderNameOf(plainSiteLabel(target.label), disease)}” 경과 폴더 생성`
       : isFollowUp && linkedFolder
         ? `“${linkedFolder.name}” 경과 보기`
         : '기록 보기';
 
   const [editing, setEditing] = useState(false);
+
+  const subtitle = capture && target
+    ? [isQuick ? '바로 스캔' : plainSiteLabel(target.label), disease].filter(Boolean).join(' · ')
+    : '피부 장벽 측정';
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -124,13 +129,13 @@ export default function ExamResultScreen({
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>피부 분석 결과</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            {[isQuick ? '바로 스캔' : plainSiteLabel(target.label), disease].filter(Boolean).join(' · ')}
+            {subtitle}
           </Text>
         </View>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body}>
-        {DUMP_RESULTS && (
+        {DUMP_ANALYSIS && (
           <View style={styles.dumpNotice}>
             <MaterialIcons name="science" size={16} color={mc.greenDeep} />
             <Text style={styles.dumpNoticeText}>
@@ -139,19 +144,28 @@ export default function ExamResultScreen({
           </View>
         )}
 
-        <PhotoPair
-          uri={capture.photoUri}
-          maskUri={analysis.local.maskUri ?? null}
-          layerUris={analysis.local.symptomMaskUris}
-          values={symptomValues}
+        {/* 경과 관찰 페이지와 같은 구성 — 사진 줄(피부 장벽 · 피부 질환 · 증상 부위) → 피부 장벽 → 피부 질환 … */}
+        <PhotoRow
+          facePhotoUri={barrier?.photoUri ?? null}
+          uri={capture?.photoUri ?? null}
+          maskUri={analysis?.local.maskUri ?? null}
         />
 
+        {barrier && (
+          <ScanRadarCard
+            title="피부 장벽"
+            icon={METRIC_ICONS.barrier}
+            result={barrier.result}
+            centerScore={barrier.result.totalScore}
+          />
+        )}
+
         {/* 이어서 기록은 이미 이름이 정해진 자리라 진단명을 다시 묻지 않는다 */}
-        {!isFollowUp && (
+        {hasDisease && !isFollowUp && (
           <DiseaseCard
-            predictions={analysis.diseases}
+            predictions={analysis!.diseases}
             disease={disease}
-            selfEntered={target.diagnosis?.source === 'self'}
+            selfEntered={target?.diagnosis?.source === 'self'}
             // 바로 스캔은 지켜보는 자리가 아니라 진단명을 붙여 둘 곳이 없다
             onEdit={isQuick ? undefined : () => setEditing(true)}
           />
@@ -159,48 +173,56 @@ export default function ExamResultScreen({
 
         {/* 4가지 증상·IGA 모델은 아토피피부염 채점 기준이라, 이 진단명이 그게 아니면(정상은 예외)
             근거 없는 값이라 이 블록을 통째로 보여주지 않는다. */}
-        {analysis.severitySupported && (
+        {hasDisease && analysis!.severitySupported && (
           <>
             <MetricCard
-              label="피부 종합 상태"
+              label="피부 질환"
               value={skinValue}
               unit="/100"
               segments={SKIN_SEGMENTS}
+              icon={METRIC_ICONS.disease}
             />
 
-            <SymptomGroupCard values={symptomValues} onOpenInsight={openInsight} />
+            <SymptomCard analysis={analysis!} />
 
-            {/* 부위별 증상은 "4가지 증상" 바로 다음 — 그 카드가 대표(가장 나쁜) 판정 단위 하나의
-                등급을 보여주는 자리이니, 병변이 여러 곳일 때 그 대표값이 어디서 왔는지를 바로
-                이어서 펼쳐 보여준다(경과 관찰 폴더의 상세 결과와 같은 순서). 병변이 한 곳뿐이면
-                위 PhotoPair의 마스크 오버레이로 이미 위치·모양을 보여줬으니 여기서 또 크롭 한
-                장을 반복할 이유가 없다. */}
-            {SHOW_REGION_SYMPTOMS && analysis.local.regions.length > 1 && (
-              <RegionSymptomsCard photoUri={capture.photoUri} regions={analysis.local.regions} />
+            {/* 부위별 증상은 "4가지 증상" 바로 다음 — 병변이 여러 곳일 때만 대표값이 어디서 왔는지 펼친다 */}
+            {analysis!.local.regions.length > 1 && (
+              <RegionSymptomsCard photoUri={capture!.photoUri} regions={analysis!.local.regions} />
             )}
           </>
         )}
 
         {/* 가려움은 이 촬영이 재는 값이 아니라 기록 탭에서 하루에 한 번 적는 값이다 — 아직 적지
-            않은 날이면 칸을 지우지 않고 수면 점수와 같은 방식으로 "미기재"를 남긴다. 자리가
-            통째로 사라지면 사용자 눈에는 분석이 그 항목을 놓친 것으로 보인다. */}
-        {capture.itchVas != null ? (
-          <MetricCard label="가려움 안정도" value={itchDisplayValue(capture.itchVas)} unit="/100" segments={ITCH_SEGMENTS} />
+            않은 날이면 칸을 지우지 않고 수면 점수와 같은 방식으로 "미기재"를 남긴다. */}
+        {itchVas != null ? (
+          <MetricCard
+            label="가려움 안정도"
+            value={itchDisplayValue(itchVas)}
+            unit="/100"
+            segments={ITCH_SEGMENTS}
+            icon={METRIC_ICONS.itch}
+          />
         ) : (
-          <EmptyMetricCard label="가려움 안정도" text="미기재" />
+          <EmptyMetricCard label="가려움 안정도" text="미기재" icon={METRIC_ICONS.itch} />
         )}
 
         {/* 스마트워치 연동 값 — 이 촬영이 재는 값이 아니라 기기 전체에서 가장 최근 값을 그대로 보여준다 */}
         {healthConnected && latestSleep ? (
-          <MetricCard label="수면 점수" value={latestSleep.record.sleepScore} unit="/100" segments={SLEEP_SEGMENTS} />
+          <MetricCard
+            label="수면 점수"
+            value={latestSleep.record.sleepScore}
+            unit="/100"
+            segments={SLEEP_SEGMENTS}
+            icon={METRIC_ICONS.sleep}
+          />
         ) : (
-          <EmptyMetricCard label="수면 점수" text="미기재" />
+          <EmptyMetricCard label="수면 점수" text="미기재" icon={METRIC_ICONS.sleep} />
         )}
       </ScrollView>
 
       <View style={styles.footer}>
         {/* 저장은 이미 끝났다는 걸 알려 준다 — 누를 것이 없어졌으니 말로라도 확인시켜 줘야 한다 */}
-        {!isQuick && (
+        {hasDisease && !isQuick && (
           <>
             <View style={styles.savedRow}>
               <MaterialIcons name="check-circle" size={15} color={mc.sev1} />
@@ -212,9 +234,14 @@ export default function ExamResultScreen({
         <Pressable
           style={styles.saveBtn}
           onPress={() => {
+            if (!hasDisease) {
+              // 피부 장벽만 잰 기록 — 피부 장벽 폴더에 남기고(이어서 기록은 이미 남겼다) 그 경과로 간다
+              if (linkedFolder) return onOpenFolder(linkedFolder.id);
+              if (barrier && onLinkBarrier) return onOpenFolder(onLinkBarrier());
+              return onClose();
+            }
             if (isQuick) return onClose();
-            // 신규 증상 기록은 예전엔 "경과 관찰에 연동" 박스에서 따로 눌러야 폴더가 생겼는데,
-            // 지금은 이 버튼 한 번으로 폴더까지 만들고 바로 그 경과로 넘어간다.
+            // 신규 증상 기록은 이 버튼 한 번으로 폴더까지 만들고(피부 장벽 결과도 함께 넣는다) 바로 그 경과로 넘어간다
             if (isNew) return onOpenFolder(onLink());
             if (isFollowUp && linkedFolder) return onOpenFolder(linkedFolder.id);
             return onOpenRecords();
@@ -228,20 +255,22 @@ export default function ExamResultScreen({
         </Text>
       </View>
 
-      <DiagnosisSheet
-        visible={editing}
-        current={target.diagnosis?.source === 'self' ? disease : undefined}
-        onClose={() => setEditing(false)}
-        onSave={(name) => {
-          setDiagnosis(target.id, {
-            diagnosed: true,
-            disease: name,
-            source: 'self',
-            photoUri: capture.photoUri,
-          });
-          setEditing(false);
-        }}
-      />
+      {target && capture && (
+        <DiagnosisSheet
+          visible={editing}
+          current={target.diagnosis?.source === 'self' ? disease : undefined}
+          onClose={() => setEditing(false)}
+          onSave={(name) => {
+            setDiagnosis(target.id, {
+              diagnosed: true,
+              disease: name,
+              source: 'self',
+              photoUri: capture.photoUri,
+            });
+            setEditing(false);
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -310,53 +339,94 @@ function DiseaseCard({
   );
 }
 
+/** 4가지 증상을 카드 하나에 모아 보여준다 */
+function SymptomCard({ analysis }: { analysis: ExamAnalysis }) {
+  const byKey = useMemo(
+    () => Object.fromEntries(analysis.local.signs.map((s) => [s.sign, s])),
+    [analysis],
+  );
+  return (
+    <View style={[monitoringCard(), styles.card]}>
+      <Text style={styles.cardLabel}>4가지 증상</Text>
+      {SIGN_ORDER.map((sign, i) => {
+        const found = byKey[sign];
+        // signDisplayValue는 원래(낮을수록 좋음) 스케일이라, 다른 카드처럼 "높을수록 좋음"으로
+        // 보여주려면 100에서 뺀다 — SYMPTOM_SEGMENTS_BASE도 이미 그 방향으로 정의돼 있다.
+        // (값이 없으면 원래 스케일에서 0 = 정상으로 보고, 뒤집은 값도 100 = 정상으로 남는다)
+        const raw = found ? signDisplayValue(sign, found.grade) : 0;
+        const value = 100 - raw;
+        return (
+          <MetricRow
+            key={sign}
+            label={SIGN_DISPLAY[sign].label}
+            value={value}
+            segments={SYMPTOM_SEGMENTS_BASE}
+            first={i === 0}
+            hideValue
+          />
+        );
+      })}
+    </View>
+  );
+}
+
 /**
- * 촬영 이미지 원본 + 분할 마스크 오버레이 + 증상 레이어 칩 — 상세 결과 화면의 사진 카드와 같은 배치.
+ * 촬영 이미지 원본 + 분할 마스크 오버레이 — 상세 결과 화면의 사진 카드와 같은 배치.
  *
  * 오버레이는 bbox를 사각형으로 그리는 대신 analyzeLocal이 이미 합성해 준 이미지(maskUri)를
  * 그대로 보여준다 — 실제 병변 모양(반투명 색 면)과 그 경계(흰 테두리 + 어두운 테두리 한 겹, 어떤
  * 피부색 위에서도 보이도록)가 그대로 담겨 있어서, 사각형 박스보다 "어디가, 어떤 모양으로" 병변인지
- * 정확히 보여준다(ai/maskOverlay.ts 참고).
+ * 정확히 보여준다(ai/maskOverlay.ts 참고). 판정 단위가 하나뿐이면 항상 붉은색(REGION_COLORS[0])
+ * 하나로 칠해진다.
  *
  * 마스크를 못 찾았거나(비정상 피부·정상 피부 등) 합성에 실패하면 maskUri가 null이라 원본을
  * 그대로 보여주고, 캡션으로 그 사실을 알린다 — 빈 오버레이를 사각 박스로 억지로 채우지 않는다.
- * 증상별 칩(SymptomLayerPhoto)은 모델이 증상별 마스크를 내줄 때(symptomMaskUris) 증상마다 따로
- * 켜고 끄고, 아직 없으면 전체 영역만 켜고 끈다.
  */
-function PhotoPair({
+function PhotoRow({
+  facePhotoUri,
   uri,
   maskUri,
-  layerUris,
-  values,
 }: {
-  uri: string;
+  /** 피부 장벽 측정 얼굴 사진 — 있으면 맨 왼쪽 (경과 관찰 페이지와 같은 순서) */
+  facePhotoUri: string | null;
+  /** 피부 질환 측정 사진 — 넘어갔으면 null */
+  uri: string | null;
   maskUri: string | null;
-  layerUris?: Partial<Record<SymptomKey, string | null>> | null;
-  values: Record<SymptomKey, number>;
 }) {
-  const layers = useMemo(() => {
-    const out: Partial<Record<SymptomKey, { uri: string }>> = {};
-    (Object.keys(layerUris ?? {}) as SymptomKey[]).forEach((k) => {
-      const u = layerUris?.[k];
-      if (u) out[k] = { uri: u };
-    });
-    return Object.keys(out).length ? out : null;
-  }, [layerUris]);
+  // 세 장이 한 줄에 들어가게 셋일 때만 줄인다
+  const size = facePhotoUri && uri ? PHOTO_SIZE_3 : PHOTO_SIZE;
+  const photoStyle = [styles.photo, { width: size, height: size }];
+  const overlayCaption = maskUri ? '증상 부위 표시' : '증상 부위를 찾지 못했어요';
   return (
-    <SymptomLayerPhoto
-      photo={{ uri }}
-      overlay={maskUri ? { uri: maskUri } : null}
-      layers={layers}
-      values={values}
-      size={PHOTO_SIZE}
-    />
+    <View style={[monitoringCard(), styles.photoCard]}>
+      <View style={[styles.photoRow, facePhotoUri && uri ? { gap: 8 } : null]}>
+        {facePhotoUri && (
+          <View style={styles.photoCol}>
+            <Image source={{ uri: facePhotoUri }} style={photoStyle} />
+            <Text style={styles.photoCaption}>피부 장벽 측정</Text>
+          </View>
+        )}
+        {uri && (
+          <>
+            <View style={styles.photoCol}>
+              <Image source={{ uri }} style={photoStyle} />
+              <Text style={styles.photoCaption}>피부 질환 측정</Text>
+            </View>
+            <View style={styles.photoCol}>
+              <Image source={{ uri: maskUri ?? uri }} style={photoStyle} />
+              <Text style={styles.photoCaption}>{overlayCaption}</Text>
+            </View>
+          </>
+        )}
+      </View>
+    </View>
   );
 }
 
 /**
  * 부위별 증상 카드 — 병변이 여러 곳으로 떨어져 있어 판정 단위(regions)가 둘 이상일 때, 그 부위를
  * 하나씩 잘라 보여주며 4가지 증상 중 "있음/없음"만 알려준다. 등급(중증도)까지 보여주지 않는 건
- * 위 "증상 요약" 카드가 이미 대표(가장 나쁜) 단위 하나로 등급을 보여주고 있어서, 여기서 부위마다
+ * 위 "4가지 증상" 카드가 이미 대표(가장 나쁜) 단위 하나로 등급을 보여주고 있어서, 여기서 부위마다
  * 등급까지 늘어놓으면 정보가 겹쳐서 오히려 어디를 봐야 할지 헷갈리기 때문이다 — 여기서는 "이 부위는
  * 무슨 증상인지"만 훑고, 얼마나 심한지는 위 카드로 돌아가 보게 한다.
  */
@@ -388,26 +458,26 @@ function RegionSymptomRow({
         <Text style={styles.regionCropCaption}>부위 {index + 1}</Text>
       </View>
       <View style={styles.regionChips}>
-        <View style={styles.symptomChipRow}>
-          {SYMPTOM_GROUPS.map((group) => {
-            // 묶음에 속한 증상 중 하나라도 이 부위에서 나타났으면 "있음"
-            const present = group.members.some((m) => {
-              const sign = SIGN_ORDER.find((sg) => SIGN_DISPLAY[sg].recordKey === m)!;
+        {SIGN_ROWS.map((row, r) => (
+          <View key={r} style={styles.symptomChipRow}>
+            {row.map((sign) => {
               const found = region.signs.find((s) => s.sign === sign);
-              return !!found && found.grade > 0;
-            });
-            return (
-              <View key={group.key} style={[styles.symptomChip, present && styles.symptomChipOn]}>
-                <MaterialIcons
-                  name={present ? 'check-circle' : 'radio-button-unchecked'}
-                  size={13}
-                  color={present ? mc.greenDeep : mc.sub}
-                />
-                <Text style={[styles.symptomChipText, present && styles.symptomChipTextOn]}>{group.label}</Text>
-              </View>
-            );
-          })}
-        </View>
+              const present = !!found && found.grade > 0;
+              return (
+                <View key={sign} style={[styles.symptomChip, present && styles.symptomChipOn]}>
+                  <MaterialIcons
+                    name={present ? 'check-circle' : 'radio-button-unchecked'}
+                    size={13}
+                    color={present ? mc.greenDeep : mc.sub}
+                  />
+                  <Text style={[styles.symptomChipText, present && styles.symptomChipTextOn]}>
+                    {SIGN_DISPLAY[sign].label}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -553,7 +623,142 @@ function RingPercent({ percent, color, size = 46 }: { percent: number; color: st
   );
 }
 
+/**
+ * 기록(경과 폴더의 하루치)을 **촬영 직후 결과 화면과 같은 모양**으로 다시 보여준다.
+ * 홈 "최근 ○○ 상태" 카드·기록 탭·아토피 기록에서 들어가는 아토피 결과 상세가 이 화면이다.
+ *
+ * 촬영 직후 화면과 같은 부품(머리말 · 사진 줄 · 진단명 · 피부 질환 · 4가지 증상 · 가려움 · 수면 ·
+ * 안내 문구)을 같은 순서·같은 스타일로 그린다. 기록에는 질환 분류 확률이 남지 않아서 진단명 칸은
+ * 그 자리의 등록된 이름만 보여주고, 지난 기록이라 하단의 저장/이동 버튼은 없다.
+ */
+export function ExamRecordResultScreen({
+  record,
+  site,
+  disease,
+  selfEntered = false,
+  hasSeverity,
+  healthConnected,
+  onClose,
+  onPhotoPress,
+}: {
+  record: any;
+  site?: string;
+  disease?: string;
+  selfEntered?: boolean;
+  /** 아토피피부염(정상 포함) 채점 기준 자리인지 — 아니면 피부 질환·4가지 증상 칸을 빼는 것도 같다 */
+  hasSeverity: boolean;
+  healthConnected: boolean;
+  onClose: () => void;
+  /** 사진을 누르면 크게 — 0: 원본, 1: 증상 부위 */
+  onPhotoPress?: (page: number) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [y, m, d] = String(record.date).split('-');
+  const dateText = `${y}.${parseInt(m, 10)}.${parseInt(d, 10)}`;
+  const subtitle = [site, disease, dateText].filter(Boolean).join(' · ');
+  const src = (p: any) => (p == null ? null : typeof p === 'number' ? p : p.uri ? { uri: p.uri } : p);
+  const photo = src(record.photo);
+  const overlay = src(record.overlay) ?? photo;
+  const photoStyle = [styles.photo, { width: PHOTO_SIZE, height: PHOTO_SIZE }];
+  const SYMPTOM_KEYS: [string, string][] = [
+    ['redness', '피부 붉기'],
+    ['bumps', '오돌토돌함'],
+    ['scratch', '긁은 상처'],
+    ['thickening', '피부 두꺼워짐'],
+  ];
+
+  return (
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
+        <Pressable style={styles.backBtn} onPress={onClose}>
+          <MaterialIcons name="close" size={22} color={AppColors.ink} />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>피부 분석 결과</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        </View>
+      </View>
+
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body}>
+        <View style={[monitoringCard(), styles.photoCard]}>
+          <View style={styles.photoRow}>
+            <Pressable style={styles.photoCol} onPress={() => onPhotoPress?.(0)}>
+              {photo && <Image source={photo} style={photoStyle} />}
+              <Text style={styles.photoCaption}>피부 질환 측정</Text>
+            </Pressable>
+            <Pressable style={styles.photoCol} onPress={() => onPhotoPress?.(1)}>
+              {overlay && <Image source={overlay} style={photoStyle} />}
+              <Text style={styles.photoCaption}>{record.overlay ? '증상 부위 표시' : '증상 부위를 찾지 못했어요'}</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <DiseaseCard predictions={null} disease={disease} selfEntered={selfEntered} />
+
+        {hasSeverity && (
+          <>
+            <MetricCard
+              label="피부 질환"
+              value={DISPLAY_SCALE.iga(record.iga)}
+              unit="/100"
+              segments={SKIN_SEGMENTS}
+              icon={METRIC_ICONS.disease}
+            />
+            <View style={[monitoringCard(), styles.card]}>
+              <Text style={styles.cardLabel}>4가지 증상</Text>
+              {SYMPTOM_KEYS.map(([key, label], i) => (
+                <MetricRow
+                  key={key}
+                  label={label}
+                  value={DISPLAY_SCALE.symptom(record[key] ?? 0)}
+                  segments={SYMPTOM_SEGMENTS_BASE}
+                  first={i === 0}
+                  hideValue
+                />
+              ))}
+            </View>
+          </>
+        )}
+
+        {record.itchVas != null ? (
+          <MetricCard
+            label="가려움 안정도"
+            value={itchDisplayValue(record.itchVas)}
+            unit="/100"
+            segments={ITCH_SEGMENTS}
+            icon={METRIC_ICONS.itch}
+          />
+        ) : (
+          <EmptyMetricCard label="가려움 안정도" text="미기재" icon={METRIC_ICONS.itch} />
+        )}
+
+        {healthConnected && record.sleepScore != null ? (
+          <MetricCard
+            label="수면 점수"
+            value={record.sleepScore}
+            unit="/100"
+            segments={SLEEP_SEGMENTS}
+            icon={METRIC_ICONS.sleep}
+          />
+        ) : (
+          <EmptyMetricCard label="수면 점수" text="미기재" icon={METRIC_ICONS.sleep} />
+        )}
+      </ScrollView>
+
+      <View style={styles.footer}>
+        <Text style={styles.disclaimer}>
+          ** 해당 앱은 치료와 진단을 하지 않습니다. 의심이 들 경우 전문의에게 상담하세요. **
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 const PHOTO_SIZE = 130;
+// 피부 장벽 얼굴 사진까지 세 장을 한 줄에 놓을 때 — 좁은 폰(375pt)에서도 카드 안에 들어가는 크기
+const PHOTO_SIZE_3 = 94;
 const REGION_CROP_SIZE = 64;
 
 const styles = StyleSheet.create({

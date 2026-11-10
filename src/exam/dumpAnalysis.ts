@@ -6,15 +6,23 @@ import diseaseMeta from '../../assets/models/disease_labels.json';
 import { makeRng } from '../folders/store';
 
 /**
- * 촬영 탭을 온디바이스 모델 없이 굴리는 스위치.
+ * 촬영 탭을 온디바이스 모델 없이 굴리는 스위치 — false면 신뢰도·기준 세션·자(얼굴/몸통) 검출이 진짜다.
  *
- * 지금은 꺼져 있다 — 실제 학습 체크포인트 3종(질환 cls_dis_512 · 중증도 cls_sev_384 ·
- * 분할 seg_lesion_512)을 float32 입출력 TFLite로 변환해 번들에 넣었고, 그 모델들이 기기에서
- * 실제로 돌아간다. 아래 dump 값은 모델 없이 화면만 확인할 일이 다시 생겼을 때를 위해 남겨 둔다.
+ * Expo Go에는 TFLite 네이티브 모듈이 없지만, 자 검출 모델(face_det_128, pose_det_224,
+ * pose_landmark_256)도 run()만 서버로 보내 실제로 돌린다 (ai/remoteModel.ts). 서버가 꺼져 있으면
+ * 자 검출만 실패로 끝나고 촬영은 그대로 된다.
  *
  * ⚠️ 켜면 여기서 나오는 숫자는 전부 가짜다 — 실제 피부 상태와 아무 관계가 없다.
  */
 export const DUMP_RESULTS = false;
+
+/**
+ * 피부 질환 **분석**(질환 분류·병변 분할·중증도)만 따로 끄는 스위치 — false면 진짜 모델 결과다.
+ *
+ * Expo Go에서도 분석은 실제로 돌린다: 모델 3개의 run()만 서버로 보내고(ai/remoteModel.ts) 전처리·
+ * 후처리는 앱 코드 그대로다.
+ */
+export const DUMP_ANALYSIS = false;
 
 /** 문자열 → 32bit 정수 시드 (folders/store.js의 해시와 같은 FNV-1a) */
 function hashStr(s: string): number {

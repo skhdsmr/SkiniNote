@@ -78,6 +78,8 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
   );
   /** ExamStartScreen의 고른 상태를 씻기 위한 key — 포커스될 때마다 올린다 */
   const [resetToken, setResetToken] = useState(0);
+  /** 홈 루틴 "가려움증 문진하기"로 들어오면 시작 화면의 오늘의 가려움 카드를 펼친다 */
+  const [itchOpenToken, setItchOpenToken] = useState(0);
   const [followUp, setFollowUp] = useState<{ folderId: string; target: MonitorTarget } | null>(null);
   const [capture, setCapture] = useState<ExamCapture | null>(null);
   const [analysis, setAnalysis] = useState<ExamAnalysis | null>(null);
@@ -141,8 +143,10 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
   useFocusEffect(
     useCallback(() => {
       const params = routeRef.current?.params ?? {};
-      if (params.mode || params.pick) navigation.setParams({ mode: undefined, pick: undefined });
+      if (params.mode || params.pick || params.focus)
+        navigation.setParams({ mode: undefined, pick: undefined, focus: undefined });
       resetTo(params);
+      if (params.focus === 'itch') setItchOpenToken((n) => n + 1);
     }, [navigation, resetTo]),
   );
 
@@ -405,6 +409,7 @@ export default function CameraScreen({ navigation, route }: { navigation: any; r
       <ExamStartScreen
         key={resetToken}
         initialPick={startPick}
+        itchOpenToken={itchOpenToken}
         onNewExam={(measure) => {
           // 신규 증상 → 피부 장벽 측정: 얼굴 촬영 → 장벽 기록에 저장 (장벽 폴더는 하나뿐이라 이어 쌓인다)
           if (measure === 'barrier') {

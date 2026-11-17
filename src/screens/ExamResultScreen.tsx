@@ -22,7 +22,7 @@ import { DUMP_ANALYSIS } from '../exam/dumpAnalysis';
 import { igaDisplayValue, itchDisplayValue, SIGN_DISPLAY, SIGN_ORDER, signDisplayValue } from '../exam/examMetrics';
 import { useMonitoring } from '../context/MonitoringContext';
 import { useProfile } from '../context/ProfileContext';
-import { MetricCard, MetricRow, EmptyMetricCard } from '../components/MetricCard';
+import { MetricCard, MetricRow, EmptyMetricCard, SymptomRow } from '../components/MetricCard';
 import { METRIC_ICONS } from '../components/metricIcons';
 import { ScanRadarCard } from './SkinScanScreen';
 import type { SkinScanResult } from '../skinScan/api';
@@ -356,13 +356,12 @@ function SymptomCard({ analysis }: { analysis: ExamAnalysis }) {
         const raw = found ? signDisplayValue(sign, found.grade) : 0;
         const value = 100 - raw;
         return (
-          <MetricRow
+          <SymptomRow
             key={sign}
+            symptomKey={SIGN_DISPLAY[sign].recordKey}
             label={SIGN_DISPLAY[sign].label}
             value={value}
-            segments={SYMPTOM_SEGMENTS_BASE}
             first={i === 0}
-            hideValue
           />
         );
       })}
@@ -709,13 +708,12 @@ export function ExamRecordResultScreen({
             <View style={[monitoringCard(), styles.card]}>
               <Text style={styles.cardLabel}>4가지 증상</Text>
               {SYMPTOM_KEYS.map(([key, label], i) => (
-                <MetricRow
+                <SymptomRow
                   key={key}
+                  symptomKey={key}
                   label={label}
                   value={DISPLAY_SCALE.symptom(record[key] ?? 0)}
-                  segments={SYMPTOM_SEGMENTS_BASE}
                   first={i === 0}
-                  hideValue
                 />
               ))}
             </View>

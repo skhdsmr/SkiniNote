@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, ImageSourcePropType, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -8,7 +8,14 @@ import { useFolders, isBarrierFolder } from '../folders/store';
 import { FACE_SCAN_TARGET } from './SkinScanScreen';
 import { useMonitoring } from '../context/MonitoringContext';
 import { MonitorTarget } from '../monitoring/types';
+import DayItchCard from '../records/DayItchCard';
 import { BARRIER_SERIES, CHART_SERIES } from '../folders/theme';
+
+/** 오늘 날짜 키 ("2026-11-10") */
+const todayDateKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+};
 
 const BARRIER_ICON = require('../../assets/icon/barrier_icon_white.png');
 const DISEASE_ICON = require('../../assets/icon/disease_icon_white.png');
@@ -36,10 +43,13 @@ export type NewMeasure = 'disease' | 'barrier';
  */
 export default function ExamStartScreen({
   initialPick = null,
+  itchOpenToken = 0,
   onNewExam,
   onFollowUp,
   onBack,
 }: {
+  /** 올라가면 오늘의 가려움 카드를 펼친다 (홈 루틴 "가려움증 문진하기") */
+  itchOpenToken?: number;
   /** 홈의 버튼으로 들어오면 그 선택지를 미리 고른 상태로 연다 */
   initialPick?: 'new' | 'followUp' | null;
   onNewExam: (measure: NewMeasure) => void;
@@ -48,6 +58,14 @@ export default function ExamStartScreen({
   onBack?: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  /** 가려움 카드 위치 — 홈 루틴 "가려움증 문진하기"로 들어오면 거기까지 내려 준다(맨 아래라 첫 화면 밖) */
+  const itchY = useRef(0);
+  useEffect(() => {
+    if (!itchOpenToken) return;
+    const t = setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(0, itchY.current - 12), animated: true }), 80);
+    return () => clearTimeout(t);
+  }, [itchOpenToken]);
   const [picked, setPicked] = useState<'new' | 'followUp' | null>(initialPick);
   const [pickedFolderId, setPickedFolderId] = useState<string | null>(null);
   const [newMeasure, setNewMeasure] = useState<NewMeasure | null>(null);
@@ -87,12 +105,12 @@ export default function ExamStartScreen({
         <Pressable style={styles.backBtn} onPress={onBack} disabled={!onBack} hitSlop={8}>
           {onBack && <MaterialIcons name="chevron-left" size={26} color={AppColors.ink} />}
         </Pressable>
-        <Text style={styles.headerTitle}>피부 촬영</Text>
+        <Text style={styles.headerTitle}>상태 기록</Text>
         <View style={styles.backBtn} />
       </View>
       <Text style={styles.step}>오늘은 무엇을 할까요?</Text>
 
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <View style={{ flexDirection: 'row', gap: 12 }}>
           {/* 자주 쓰는 쪽(이어서 기록)을 왼쪽에 둔다 */}
           <ChoiceCard
@@ -167,6 +185,12 @@ export default function ExamStartScreen({
           </>
         )}
 
+        {/* 오늘의 가려움 — 하루에 한 번 적으면 그날 촬영한 기록 전부에 적용된다(records/itchStore).
+            모니터링 탭(예전 기록 탭) 달력 밑에 있던 것을 상태를 기록하는 이 탭 맨 아래로 옮겼다. */}
+        <View style={{ height: 20 }} />
+        <View onLayout={(e) => (itchY.current = e.nativeEvent.layout.y)}>
+          <DayItchCard dateKey={todayDateKey()} openToken={itchOpenToken} />
+        </View>
       </ScrollView>
 
       <View style={styles.footer}>

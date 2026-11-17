@@ -1,7 +1,8 @@
 import React from 'react';
 import { Image, ImageSourcePropType, StyleSheet, Text, View } from 'react-native';
-import { AppColors } from '../theme';
-import { monitoringColors as mc, monitoringCard, segmentFor } from '../folders/theme';
+import { AppColors, textOnColor } from '../theme';
+import { MaterialIcons } from '@expo/vector-icons';
+import { monitoringColors as mc, monitoringCard, segmentFor, SYMPTOM_SEGMENTS_BASE } from '../folders/theme';
 import ScaleBar from '../folders/components/ScaleBar';
 
 type Segment = { to: number; ko: string; color: string };
@@ -92,6 +93,53 @@ export function MetricRow({
         <Badge text={band.ko} color={band.color} small />
       </View>
       <ScaleBar value={value} segments={segments} compact />
+    </View>
+  );
+}
+
+/** 세부 증상별 아이콘 */
+const SYMPTOM_ICONS: Record<string, React.ComponentProps<typeof MaterialIcons>['name']> = {
+  redness: 'local-fire-department',
+  bumps: 'grain',
+  scratch: 'gesture',
+  thickening: 'layers',
+};
+
+/** 밝은 단계 색(노랑·연파랑)을 글자·아이콘에 쓸 때 읽히도록 어둡게 */
+function deepen(hex: string, amount = 0.38): string {
+  const m = /^#?([0-9a-f]{6})/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => Math.round(v * (1 - amount)));
+  return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * 세부 증상 한 줄 — 아이콘 · 이름 · 단계 막대(3칸) · 단계 이름. 한 줄에 다 담아 자리를 적게 쓴다.
+ * 단계는 앱 공용 4단계(SYMPTOM_SEGMENTS_BASE: 없음 · 미미함 · 두드러짐 · 뚜렷함)를 그대로 쓰고,
+ * 막대는 단계 수와 같은 **4칸** — 없음 1칸 → 뚜렷함 4칸을 그 단계 색으로 채운다.
+ * value는 다른 지표처럼 "높을수록 좋음" 0~100 표시값(DISPLAY_SCALE.symptom).
+ */
+export function SymptomRow({ symptomKey, label, value, first }: { symptomKey: string; label: string; value: number; first?: boolean }) {
+  const band = segmentFor(value, SYMPTOM_SEGMENTS_BASE);
+  // SYMPTOM_SEGMENTS_BASE 순서: 없음(0) · 미미함(1) · 두드러짐(2) · 뚜렷함(3) — 채울 칸 수는 +1
+  const level = SYMPTOM_SEGMENTS_BASE.findIndex((s) => s.ko === band.ko);
+  const tone = deepen(band.color);
+  return (
+    <View style={[styles.symRow, !first && styles.symDivided]}>
+      <View style={[styles.symIcon, { backgroundColor: band.color + '33' }]}>
+        <MaterialIcons name={SYMPTOM_ICONS[symptomKey] ?? 'circle'} size={16} color={tone} />
+      </View>
+      <Text style={styles.symLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <View style={styles.symBars}>
+        {[0, 1, 2, 3].map((k) => (
+          <View key={k} style={[styles.symBar, { backgroundColor: k <= level ? band.color : mc.line }]} />
+        ))}
+      </View>
+      <View style={{ flex: 1 }} />
+      <Text style={[styles.symLevel, { color: level === 0 ? mc.sub : tone }]}>{band.ko}</Text>
     </View>
   );
 }
@@ -209,7 +257,7 @@ export function Badge({
     <View style={[styles.badge, small && styles.badgeSmall, tight && styles.badgeTight, { backgroundColor: color }]}>
       {/* 좁은 요약칸에서 "또래 상위 12%"처럼 긴 글씨가 잘리지 않게 줄여서 한 줄에 담는다 */}
       <Text
-        style={[styles.badgeText, small && styles.badgeTextSmall, tight && styles.badgeTextTight]}
+        style={[styles.badgeText, small && styles.badgeTextSmall, tight && styles.badgeTextTight, { color: textOnColor(color) }]}
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.6}
@@ -221,6 +269,13 @@ export function Badge({
 }
 
 const styles = StyleSheet.create({
+  symRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9 },
+  symDivided: { borderTopWidth: 1, borderTopColor: mc.line },
+  symIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  symLabel: { fontSize: 14, fontWeight: '700', color: mc.ink },
+  symBars: { flexDirection: 'row', gap: 3 },
+  symBar: { width: 14, height: 5, borderRadius: 3 },
+  symLevel: { fontSize: 13, fontWeight: '800' },
   card: { padding: 16 },
   headRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   label: { fontSize: 16, fontWeight: '800', color: mc.ink },

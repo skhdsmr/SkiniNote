@@ -11,8 +11,8 @@ type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 // 라우트 이름 → (아이콘, 라벨)
 const TABS: Record<string, { icon: IconName; label: string }> = {
   Home: { icon: 'home', label: '홈' },
-  Camera: { icon: 'photo-camera', label: '피부 촬영' },
-  Records: { icon: 'calendar-today', label: '기록' },
+  Camera: { icon: 'photo-camera', label: '상태 기록' },
+  Records: { icon: 'calendar-today', label: '모니터링' },
   Routine: { icon: 'checklist', label: '루틴' },
   Profile: { icon: 'person', label: '내 정보' },
 };

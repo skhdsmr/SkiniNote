@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { PanResponder, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { PanResponder, ScrollView, StyleProp, StyleSheet, Text, TouchableOpacity, View, ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppColors, cardDecoration } from '../theme';
@@ -137,8 +137,10 @@ function shortDisease(name?: string): string | undefined {
   return name === '아토피피부염' ? '아토피' : name;
 }
 
-interface TrackedSite {
+export interface TrackedSite {
   folderId: string;
+  /** 짧은 질환 이름 ("아토피" …) — 기록 탭 추이 칸의 부위 상세에 쓴다 */
+  disease?: string;
   /** 화면에 쓰는 자리 이름 ("팔", "머리" …) */
   label: string;
   parts: BodyPartId[];
@@ -158,11 +160,10 @@ interface SiteTrend {
   delta: number;
 }
 
-export default function WholeBodyResultScreen({ navigation }: { navigation: any }) {
+/** 전신 지도에 올릴 자리들 — 폴더 → 몸 그림의 덩어리 (기록 탭의 "추이" 칸도 같은 것을 쓴다) */
+export function useWholeBodySites(): TrackedSite[] {
   const folders = useFolders();
   const { findTarget } = useMonitoring();
-  const { healthConnected } = useProfile();
-
   // 폴더 → 몸 그림의 덩어리. 대상(MonitorTarget)이 없는 폴더는 몸의 어디인지 알 수 없어 지도에 올리지 못한다.
   const sites = useMemo<TrackedSite[]>(() => {
     const out: TrackedSite[] = [];
@@ -180,6 +181,7 @@ export default function WholeBodyResultScreen({ navigation }: { navigation: any 
           .filter(Boolean)
           .join(' '),
         parts,
+        disease: shortDisease(target.diagnosis?.disease ?? folder.disease),
         records: folder.records,
         /*
           등급(IGA)을 매길 수 있는 자리인지. 4가지 증상·IGA 모델은 아토피 채점 기준으로 학습돼
@@ -195,24 +197,14 @@ export default function WholeBodyResultScreen({ navigation }: { navigation: any 
     }
     return out;
   }, [folders, findTarget]);
+  return sites;
+}
 
-  const today = todayKey();
-  // 슬라이더가 훑는 구간 — 가장 오래된 기록부터 오늘까지
-  const span = useMemo(() => {
-    let oldest = today;
-    sites.forEach((s) => {
-      const first = s.records[0].date;
-      if (daysBetween(first, oldest) > 0) oldest = first;
-    });
-    return Math.max(0, daysBetween(oldest, today));
-  }, [sites, today]);
-
-  // 0 = 가장 오래된 날, span = 오늘. 처음에는 오늘을 보여준다.
-  const [tick, setTick] = useState<number | null>(null);
-  const dayIndex = Math.min(span, tick ?? span);
-  const daysAgo = span - dayIndex;
-  const selectedKey = addDaysKey(today, -daysAgo);
-
+/** selectedKey(YYYY-MM-DD) 시점의 덩어리별 동그라미 — 그날까지의 마지막 기록 기준 */
+export function useGroupMarkers(
+  sites: TrackedSite[],
+  selectedKey: string,
+): Partial<Record<CoarseGroupId, PartMarkerStyle[]>> {
   const trends = useMemo<SiteTrend[]>(() => {
     const out: SiteTrend[] = [];
     const windowKey = addDaysKey(selectedKey, -TREND_WINDOW_DAYS);
@@ -334,31 +326,111 @@ export default function WholeBodyResultScreen({ navigation }: { navigation: any 
     });
     return out;
   }, [trends]);
+  return groupMarkers;
+}
+
+/** 몸 그림(덩어리별 색 칠하기) — 기록 탭 추이 칸의 전신 지도. 범례는 아래 SkinLevelBar */
+export function BodyMapCanvas({
+  markers,
+  style,
+}: {
+  markers: Partial<Record<CoarseGroupId, PartMarkerStyle[]>>;
+  /** 높이를 바꿔 끼울 때 (기록 탭 추이 칸은 남는 높이를 다 쓴다) */
+  style?: StyleProp<ViewStyle>;
+}) {
+  const fills: Partial<Record<CoarseGroupId, string>> = {};
+  (Object.keys(markers) as CoarseGroupId[]).forEach((g) => {
+    const c = markers[g]?.[0]?.color;
+    if (c) fills[g] = c;
+  });
+  return (
+    <View style={[styles.bodyCanvas, style]}>
+      {/* 동그라미·넓이(점선) 없이 덩어리 전체를 그 자리 피부 질환 단계 색으로 칠한다 */}
+      <Body2DView partFills={fills} />
+    </View>
+  );
+}
+
+/**
+ * 색 막대 범례 — 4단계 색을 같은 폭 칸으로 나란히, 아래에 단계 이름. 순서는 앱의 다른 단계
+ * 막대(ScaleBar)와 같다(왼쪽 = 나쁨 → 오른쪽 = 좋음). 기록 탭 추이 칸의 전신 지도 아래에 둔다.
+ */
+export function SkinLevelBar() {
+  return (
+    <View style={styles.levelBar}>
+      <View style={styles.levelRow}>
+        {SKIN_SEGMENTS.map((seg) => (
+          <View key={seg.ko} style={[styles.levelSeg, { backgroundColor: seg.color }]} />
+        ))}
+      </View>
+      <View style={styles.levelRow}>
+        {SKIN_SEGMENTS.map((seg) => (
+          <Text key={seg.ko} style={styles.levelLabel} numberOfLines={1}>
+            {seg.ko}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+export default function WholeBodyResultScreen({ navigation }: { navigation: any }) {
+  return (
+    <SafeAreaView style={styles.container}>
+      <TopBar navigation={navigation} />
+      <WholeBodyTrendView navigation={navigation} />
+    </SafeAreaView>
+  );
+}
+
+/**
+ * 전신 결과의 본문(지도 + 날짜 슬라이더 + 부위별 표) — 상단 바 없이 스크롤 영역만 그린다.
+ * (기록 탭의 "추이" 칸은 여기서 지도 부분만 — useWholeBodySites · useGroupMarkers · BodyMapCanvas — 가져다 쓴다.)
+ */
+export function WholeBodyTrendView({ navigation }: { navigation: any }) {
+  const folders = useFolders();
+  const { healthConnected } = useProfile();
+
+  const sites = useWholeBodySites();
+
+  const today = todayKey();
+  // 슬라이더가 훑는 구간 — 가장 오래된 기록부터 오늘까지
+  const span = useMemo(() => {
+    let oldest = today;
+    sites.forEach((s) => {
+      const first = s.records[0].date;
+      if (daysBetween(first, oldest) > 0) oldest = first;
+    });
+    return Math.max(0, daysBetween(oldest, today));
+  }, [sites, today]);
+
+  // 0 = 가장 오래된 날, span = 오늘. 처음에는 오늘을 보여준다.
+  const [tick, setTick] = useState<number | null>(null);
+  const dayIndex = Math.min(span, tick ?? span);
+  const daysAgo = span - dayIndex;
+  const selectedKey = addDaysKey(today, -daysAgo);
+
+  const groupMarkers = useGroupMarkers(sites, selectedKey);
 
   if (!sites.length) {
     return (
-      <SafeAreaView style={styles.container}>
-        <TopBar navigation={navigation} />
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 24, flexGrow: 1 }}
-        >
-          <Text style={styles.subtitle}>지켜보는 자리가 쌓이면 전신 지도에 표시돼요</Text>
-          <View style={styles.emptyWrap}>
-            <MaterialIcons name="accessibility-new" size={40} color={AppColors.sub} />
-            <View style={{ height: 10 }} />
-            <Text style={styles.emptyText}>아직 표시할 기록이 없어요</Text>
-          </View>
-        </ScrollView>
-      </SafeAreaView>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 24, flexGrow: 1 }}
+      >
+        <Text style={styles.subtitle}>지켜보는 자리가 쌓이면 전신 지도에 표시돼요</Text>
+        <View style={styles.emptyWrap}>
+          <MaterialIcons name="accessibility-new" size={40} color={AppColors.sub} />
+          <View style={{ height: 10 }} />
+          <Text style={styles.emptyText}>아직 표시할 기록이 없어요</Text>
+        </View>
+      </ScrollView>
     );
   }
 
   const [y, m, d] = selectedKey.split('-').map(Number);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <TopBar navigation={navigation} />
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 8, paddingBottom: 16 }}
@@ -412,7 +484,6 @@ export default function WholeBodyResultScreen({ navigation }: { navigation: any 
         />
 
       </ScrollView>
-    </SafeAreaView>
   );
 }
 
@@ -441,7 +512,7 @@ function TopBar({ navigation }: { navigation: any }) {
  * 손가락 x는 화면 절대좌표로만 안정적으로 얻을 수 있어서, 트랙이 놓인 위치를 재 두고 그 차이로
  * 값을 계산한다 (가려움 문진의 VAS 슬라이더와 같은 방식).
  */
-function DaySlider({ max, value, onChange }: { max: number; value: number; onChange: (v: number) => void }) {
+export function DaySlider({ max, value, onChange }: { max: number; value: number; onChange: (v: number) => void }) {
   const trackRef = useRef<React.ComponentRef<typeof View>>(null);
   const geom = useRef({ x: 0, width: 0 });
   const maxRef = useRef(max);
@@ -569,6 +640,10 @@ function MarkerLegend() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: AppColors.bg },
+  levelBar: { gap: 3, marginTop: 4 },
+  levelRow: { flexDirection: 'row', gap: 4 },
+  levelSeg: { flex: 1, height: 8, borderRadius: 4 },
+  levelLabel: { flex: 1, textAlign: 'center', fontSize: 10.5, fontWeight: '600', color: AppColors.sub },
   // MonitoringFolderScreen의 topBar/topBarTitle과 같은 치수·색 — 두 화면이 같은 헤더로 보이게 한다
   topBar: {
     height: 56, flexDirection: 'row', alignItems: 'center',

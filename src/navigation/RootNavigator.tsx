@@ -14,6 +14,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import MonitoringScreen from '../folders/screens/MonitoringScreen';
 import MonitoringFolderScreen from '../folders/screens/MonitoringFolderScreen';
 import MonitoringDetailScreen from '../folders/screens/MonitoringDetailScreen';
+import MonitoringCompareScreen from '../folders/screens/MonitoringCompareScreen';
 import AtopyHistoryScreen from '../screens/AtopyHistoryScreen';
 import BarrierHistoryScreen from '../screens/BarrierHistoryScreen';
 
@@ -77,6 +78,8 @@ export default function RootNavigator() {
       <Stack.Screen name="Monitoring" component={MonitoringScreen} />
       <Stack.Screen name="MonitoringFolder" component={MonitoringFolderScreen} />
       <Stack.Screen name="MonitoringDetail" component={MonitoringDetailScreen} />
+      {/* 경과 관찰 "두 날짜 비교" → 비교하기 */}
+      <Stack.Screen name="MonitoringCompare" component={MonitoringCompareScreen} />
       {/* WholeBody는 다른 화면들과 같은 자체 상단 바(TopBar)를 그리므로 네이티브 헤더는 끈다 —
           MonitoringFolder 등과 같은 headerShown: false 규칙을 따른다. */}
       <Stack.Screen name="WholeBody" component={WholeBodyResultScreen} />

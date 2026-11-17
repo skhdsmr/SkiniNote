@@ -112,7 +112,8 @@ export const DEMO_TARGETS: MonitorTarget[] = [
  * 등급이 매겨지는 몸통을 앞에 둬야 그 카드가 점수까지 온전히 보여준다 — 건선이 앞에 오면 같은
  * 자리에 점수 대신 질환명만 적힌다.
  */
-export const VISIBLE_DEMO_TARGET_IDS: readonly string[] = ['tgt_demo_torso', 'tgt_demo_arm'];
+// 얼굴 아토피(tgt_demo_cheek)도 올린다 — 기록 탭 추이 칸에서 얼굴에 아토피 · 피부 장벽 이름표가 둘 뜨는 예시
+export const VISIBLE_DEMO_TARGET_IDS: readonly string[] = ['tgt_demo_torso', 'tgt_demo_arm', 'tgt_demo_cheek'];
 
 /** 화면에 올릴 데모 대상만 — 모니터링 목록·이어서 기록하기가 이 목록을 쓴다 */
 export const VISIBLE_DEMO_TARGETS: MonitorTarget[] = DEMO_TARGETS.filter((t) =>

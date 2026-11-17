@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Svg, { Rect } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
-import { AppColors, cardDecoration } from '../theme';
+import { AppColors, cardDecoration, textOnColor } from '../theme';
 import { plainSiteLabel } from '../models';
 import { useFolders, folderHasSeverity, isBarrierFolder } from '../folders/store';
 import { DISPLAY_SCALE, skinConditionInfo, itchBand, sleepBand, skinBarrierInfo } from '../folders/theme';
@@ -11,8 +11,15 @@ import LesionThumb from '../folders/components/LesionThumb';
 import { useMonitoring } from '../context/MonitoringContext';
 import { useProfile } from '../context/ProfileContext';
 import MemoBlock from '../records/MemoBlock';
-import DayItchCard from '../records/DayItchCard';
 import { MemoTarget, normalizeDateKey, useDatesWithMemos, useHasMemo } from '../records/memoStore';
+import TrendTab from '../records/TrendTab';
+
+/** 기록 탭 상단의 칸 나누기 — 달력(날짜별 기록) / 추이(전신 결과) */
+type RecordsTab = 'calendar' | 'trend';
+const RECORDS_TABS: { key: RecordsTab; label: string }[] = [
+  { key: 'calendar', label: '달력' },
+  { key: 'trend', label: '추이' },
+];
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -34,43 +41,12 @@ function todayCellKey(): string {
 export default function RecordsScreen({ route }: { route?: any }) {
   const folders = useFolders();
   const navigation = useNavigation<any>();
-  /*
-    루틴에서 "가려움증 문진하기"로 넘어오면 오늘의 가려움 칸을 펼치고 거기까지 스크롤한다 —
-    기록 탭 첫 화면에 내려놓기만 하면 여전히 사용자가 카드를 찾아 눌러야 한다.
-
-    파라미터는 **읽자마자 지운다.** 안 지우면 이 탭으로 돌아올 때마다 카드가 다시 열려서,
-    사용자가 접어 둔 것을 앱이 계속 되돌린다.
-  */
-  const focusItch = route?.params?.focus === 'itch';
   const [view, setView] = useState(() => new Date());
   // 캘린더를 누르기 전에도 오늘 기록이 바로 보이도록, 기본 선택 날짜를 오늘로 둔다.
   const [selectedKey, setSelectedKey] = useState<string | null>(() => todayCellKey());
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
-  /** 가려움 카드가 화면 어디쯤에 있는지 — 넘어왔을 때 거기까지 데려다주려고 재 둔다 */
-  const itchCardY = useRef(0);
-  const [itchOpenToken, setItchOpenToken] = useState(0);
+  const [tab, setTab] = useState<RecordsTab>('calendar');
 
-  useEffect(() => {
-    if (!focusItch) return;
-    navigation.setParams({ focus: undefined });
-    /*
-      루틴에서 눌러 온 줄은 **오늘 줄**이다. 지난 주를 들춰보다 넘어왔더라도 그날 칸을 열어 주면
-      엉뚱한 날짜에 오늘의 가려움을 적게 되므로, 달력을 오늘로 되돌리고 나서 카드를 펼친다.
-    */
-    setView(new Date());
-    setSelectedKey(todayCellKey());
-    setItchOpenToken((n) => n + 1);
-  }, [focusItch, navigation]);
-
-  // 펼치기만 하면 화면 밖에 있을 수 있다 — 달력 아래라 첫 화면에서 잘리는 위치다
-  useEffect(() => {
-    if (itchOpenToken === 0) return;
-    const timer = setTimeout(
-      () => scrollRef.current?.scrollTo({ y: Math.max(0, itchCardY.current - 12), animated: true }),
-      60, // 카드가 펼쳐져 자리를 잡은 뒤에 옮긴다
-    );
-    return () => clearTimeout(timer);
-  }, [itchOpenToken]);
 
   // 모든 모니터링 폴더의 기록을 날짜(달력 셀 키) 기준으로 묶어 둔다 — 같은 날 여러 부위를
   // 찍었으면 그 날짜 칸에 여러 건이 쌓인다.
@@ -95,6 +71,7 @@ export default function RecordsScreen({ route }: { route?: any }) {
     setSelectedKey(null);
   };
 
+
   /** 달력이 "이번 달 전체보기"일 때 화살표가 한 달씩 옮긴다 */
   const changeMonth = (delta: number) => {
     setView((v) => {
@@ -106,17 +83,25 @@ export default function RecordsScreen({ route }: { route?: any }) {
   };
 
   return (
+    <View style={{ flex: 1 }}>
+      {/* 제목과 칸 나누기는 스크롤해도 위에 붙어 있다 */}
+      <View style={styles.header}>
+        <Text style={styles.title}>모니터링</Text>
+        <View style={{ height: 12 }} />
+        <SegmentedTabs value={tab} onChange={setTab} />
+      </View>
+
+      {tab === 'trend' ? (
+        // 전신 지도(기록된 날짜 슬라이더) → 피부 장벽 점수 → 가려움 그래프 → 수면 점수 그래프
+        <TrendTab navigation={navigation} />
+      ) : (
     <ScrollView
       ref={scrollRef}
       style={{ flex: 1 }}
-      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 24 }}
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 24 }}
       // 메모를 쓰는 중에도 접기 버튼·다른 날짜가 한 번에 눌리도록
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>기록</Text>
-      <View style={{ height: 4 }} />
-      <Text style={styles.subtitle}>그동안의 기록을 달력으로 확인하세요</Text>
-      <View style={{ height: 16 }} />
 
       <CalendarCard
         view={view}
@@ -127,30 +112,9 @@ export default function RecordsScreen({ route }: { route?: any }) {
         onChangeMonth={changeMonth}
       />
 
-      <View style={{ height: 16 }} />
-      {/* 촬영 흐름에 있던 가려움 문진이 여기로 왔다 — 하루에 한 번 적으면 그날 촬영한 기록에
-          전부 적용된다(records/itchStore). 달력 바로 밑이 자리인 이유는 "그날 무엇을 남겼나"를
-          보는 흐름의 첫 칸이 이 값이기 때문이다. 날짜를 아직 고르지 않았으면 오늘을 받는다. */}
-      {/* 날짜가 바뀌면 편집 중이던 값이 남지 않도록 카드를 새로 세운다 */}
-      <View onLayout={(e) => (itchCardY.current = e.nativeEvent.layout.y)}>
-        <DayItchCard
-          key={selectedKey ?? 'today'}
-          dateKey={selectedKey ?? todayCellKey()}
-          openToken={itchOpenToken}
-        />
-      </View>
+      {/* 오늘의 가려움 기록은 상태 기록 탭(ExamStartScreen)으로 옮겼다 */}
 
-      <View style={{ height: 10 }} />
-      {/* 자리별 경과 관찰은 전신 결과 안에서(행 이름 "몸통 아토피 ›", 범례 "피부 장벽 ›") 들어간다 —
-          그래서 여기엔 "경과 관찰" 버튼을 따로 두지 않는다. */}
-      <ActionBox
-        icon="accessibility-new"
-        title="전신 결과"
-        caption="전신 분석 결과 모아보기"
-        trailing="chevron-right"
-        accent
-        onPress={() => navigation.navigate('WholeBody')}
-      />
+      {/* 전신 결과는 이제 위의 "추이" 칸에서 바로 본다 — 예전의 "전신 결과" 버튼은 뺐다 */}
 
       {selectedKey != null && (
         <>
@@ -160,36 +124,30 @@ export default function RecordsScreen({ route }: { route?: any }) {
         </>
       )}
     </ScrollView>
+      )}
+    </View>
   );
 }
 
-/** 달력 아래에 놓이는 큰 네모 버튼 */
-function ActionBox({
-  icon,
-  title,
-  caption,
-  trailing,
-  accent,
-  onPress,
-}: {
-  icon: React.ComponentProps<typeof MaterialIcons>['name'];
-  title: string;
-  caption?: string;
-  trailing: React.ComponentProps<typeof MaterialIcons>['name'];
-  accent?: boolean;
-  onPress: () => void;
-}) {
+/** 기록 탭 상단의 회색 바 안에 흰 알약이 선택된 칸을 표시하는 칸 나누기 */
+function SegmentedTabs({ value, onChange }: { value: RecordsTab; onChange: (t: RecordsTab) => void }) {
   return (
-    <Pressable style={[cardDecoration(16), styles.actionBox, accent && styles.actionBoxAccent]} onPress={onPress}>
-      <View style={[styles.actionIcon, accent && styles.actionIconAccent]}>
-        <MaterialIcons name={icon} size={20} color={accent ? '#16320A' : AppColors.greenMuted} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.actionTitle}>{title}</Text>
-        {caption != null && <Text style={styles.actionCaption}>{caption}</Text>}
-      </View>
-      <MaterialIcons name={trailing} size={22} color={AppColors.sub} />
-    </Pressable>
+    <View style={styles.segment}>
+      {RECORDS_TABS.map((t) => {
+        const active = t.key === value;
+        return (
+          <Pressable
+            key={t.key}
+            style={[styles.segmentItem, active && styles.segmentItemActive]}
+            onPress={() => onChange(t.key)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+          >
+            <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{t.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -602,7 +560,12 @@ function StatCol({
       {band !== undefined && (
         <View style={[styles.statColBadge, { backgroundColor: band?.color ?? AppColors.sub }]}>
           {/* "또래 상위 28%"처럼 긴 배지도 잘리지 않게 줄여서 담는다 */}
-          <Text style={styles.statColBandText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+          <Text
+            style={[styles.statColBandText, { color: textOnColor(band?.color ?? AppColors.sub) }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
             {band?.ko ?? noneText}
           </Text>
         </View>
@@ -612,7 +575,26 @@ function StatCol({
 }
 
 const styles = StyleSheet.create({
+  header: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 4 },
   title: { fontSize: 22, fontWeight: '800', color: AppColors.ink },
+  segment: {
+    flexDirection: 'row',
+    padding: 4,
+    borderRadius: 14,
+    // 화면 배경(AppColors.bg)보다 한 톤 진한 회색 — 흰 알약이 떠 보이게
+    backgroundColor: '#E1E5EA',
+  },
+  segmentItem: { flex: 1, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  segmentItemActive: {
+    backgroundColor: AppColors.card,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  segmentText: { fontSize: 14.5, fontWeight: '600', color: AppColors.sub },
+  segmentTextActive: { fontWeight: '800', color: AppColors.ink },
   subtitle: { fontSize: 13.5, color: AppColors.sub },
   sectionTitle: { fontSize: 17, fontWeight: '800', color: AppColors.ink },
 

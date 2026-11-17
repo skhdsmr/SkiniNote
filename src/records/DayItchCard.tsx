@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { AppColors, cardDecoration } from '../theme';
+import { AppColors, cardDecoration, textOnColor } from '../theme';
 import { useFolders } from '../folders/store';
 import { DISPLAY_SCALE, ITCH_SEGMENTS, segmentFor } from '../folders/theme';
 import ItchVasSlider from '../components/ItchVasSlider';
@@ -76,7 +76,7 @@ export default function DayItchCard({
   };
 
   return (
-    <View style={[cardDecoration(16), styles.card, saved == null && styles.cardEmpty]}>
+    <View style={[cardDecoration(16), styles.card, open && styles.cardOpen]}>
       <Pressable style={styles.headerRow} onPress={toggle}>
         <View style={[styles.icon, saved == null && styles.iconEmpty]}>
           {/* 가려움 안정도 아이콘(경과 관찰·홈 요약칸과 같은 그림) — 흰 선화라 예전 아이콘 색으로 물들인다 */}
@@ -123,7 +123,7 @@ export default function DayItchCard({
           <View style={styles.severityHead}>
             <Text style={styles.severityTitle}>가려움 정도</Text>
             <View style={[styles.severityPill, { backgroundColor: band.color }]}>
-              <Text style={styles.severityPillText}>{draft} / {MAX_VAS}</Text>
+              <Text style={[styles.severityPillText, { color: textOnColor(band.color) }]}>{draft} / {MAX_VAS}</Text>
             </View>
           </View>
           <Text style={[styles.severitySub, { color: band.color }]}>{band.ko}</Text>
@@ -149,8 +149,8 @@ export default function DayItchCard({
 
 const styles = StyleSheet.create({
   card: { paddingHorizontal: 16, paddingVertical: 14 },
-  /** 아직 안 적은 날은 테두리를 둘러 눈에 띄게 — 이 탭에서 사용자가 직접 채우는 유일한 값이다 */
-  cardEmpty: { borderWidth: 1.5, borderColor: AppColors.greenTop },
+  /** 눌러서 펼쳤을 때만 연두 테두리 — 지금 적고 있는 카드라는 표시 */
+  cardOpen: { borderWidth: 1.5, borderColor: AppColors.greenTop },
   headerRow: { flexDirection: 'row', alignItems: 'center' },
   icon: {
     width: 38,

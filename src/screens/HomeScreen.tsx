@@ -125,7 +125,7 @@ export default function HomeScreen({ navigation }: { navigation: any }) {
       <TodayCareCard
         items={careItemsForOffset(0)}
         /* "가려움증 문진하기" 줄은 체크만 하는 게 아니라 실제로 적으러 갈 수 있어야 한다 */
-        onOpenItch={() => navigation.navigate('Records', { focus: 'itch' })}
+        onOpenItch={() => navigation.navigate('Camera', { focus: 'itch' })}
         /* "피부 상태 기록하기" 줄은 카메라 탭 "이어서 기록하기"가 이미 골라진 채로 넘어간다 */
         onQuickRecord={() => navigation.navigate('Camera', { mode: 'atopy', pick: 'followUp' })}
         onToggle={(key) => toggleForOffset(0, key)}

@@ -194,6 +194,34 @@ function makeDumpSkinScan(total, jitter) {
   };
 }
 
+/*
+  ── 데모 가려움 · 수면 (사람 단위, 날짜만의 함수) ─────────────────────────
+  가려움·수면은 사진 한 장이 아니라 **그날 그 사람**의 값이다. 예전에는 폴더마다 자기 from/to에
+  물결·잡음을 얹어 따로 만들었는데, 여러 폴더의 기록 날짜가 섞이면 그래프가 폴더 사이를 오가며
+  톱니처럼 진동했다. 이제 모든 데모 기록이 날짜 하나로 정해지는 같은 매끈한 곡선을 쓴다 —
+  DEMO_PERSON_SPAN일 전 → 오늘 사이를 선형으로(수면 60 → 82, 가려움 VAS 7 → 2).
+  ⚠️ 지어낸 dump 값이다.
+*/
+const DEMO_PERSON_SPAN = 53;
+function demoPersonDay(dateKey) {
+  const t = clamp(1 - daysBetween(dateKey, todayKey()) / DEMO_PERSON_SPAN, 0, 1);
+  return { sleepScore: Math.round(lerp(60, 82, t)), itchVas: Math.round(lerp(7, 2, t)) };
+}
+
+/**
+ * 데모 병변 넓이의 진행도 0~1 — 구간별 직선. 두 번 멈춘다(0.25~0.45, 0.7~0.85 동안 그대로).
+ * 줄어들기만 하고 다시 늘지는 않아 그래프가 진동하지 않는다.
+ */
+const AREA_SHRINK_KNOTS = [[0, 0], [0.25, 0.35], [0.45, 0.35], [0.7, 0.75], [0.85, 0.75], [1, 1]];
+function demoAreaShrink(t) {
+  for (let i = 1; i < AREA_SHRINK_KNOTS.length; i++) {
+    const [t0, v0] = AREA_SHRINK_KNOTS[i - 1];
+    const [t1, v1] = AREA_SHRINK_KNOTS[i];
+    if (t <= t1) return v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+  }
+  return 1;
+}
+
 function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to, photos, overlays, photoStart = 0, demoMultiRegionOnLast, areaKind, dateOverrides }) {
   const rng = makeRng(seedBase);
 
@@ -223,17 +251,14 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to,
     const envelope = Math.sin(t * Math.PI); // 0(양 끝) ~ 1(중간) — 첫/최근 기록은 from/to 값을 그대로 유지
     const wave = (phaseOffset) => Math.sin(t * Math.PI * waveFreq + wavePhase + phaseOffset) * envelope;
 
-    const sleepSpan = Math.max(6, Math.abs(to.sleep - from.sleep));
-    const itchSpan = Math.max(1.5, Math.abs(to.itch - from.itch));
-    const igaSpan = Math.max(1, Math.abs(to.iga - from.iga));
 
-    // 수면 점수(삼성헬스, 0~100, 정수) · 가려움 VAS(0~10, 정수) — 둘 다 그대로 나올 수 있는 값이다.
-    const sleepScore = clamp(Math.round(lerp(from.sleep, to.sleep, t) + wave(0) * sleepSpan * 0.4 + noise() * sleepSpan * 0.14), 0, 100);
-    const itchVas = clamp(Math.round(lerp(from.itch, to.itch, t) + wave(1.3) * itchSpan * 0.4 + noise() * itchSpan * 0.14), 0, 10);
+    // 수면 점수(0~100) · 가려움 VAS(0~10) — 폴더와 무관하게 날짜로 정해지는 매끈한 값(demoPersonDay)
+    const { sleepScore, itchVas } = demoPersonDay(addDaysKey(startKey, offset));
     // 피부 질환(IGA) — 모델은 5단계(0~4) 확률의 기댓값을 계산해서 쓰지만, 화면·기록에 실제로
     // 남는 값(igaGrade)은 그 기댓값을 등급 경계로 이산화한 정수다(src/ai/dex.ts의 bucketize) —
     // 1.7 같은 소수는 실제로는 절대 나오지 않으므로, dump도 정수 등급만 뽑는다.
-    const igaContinuous = clamp(lerp(from.iga, to.iga, t) + wave(2.6) * igaSpan * 0.4 + noise() * igaSpan * 0.14, 0, 4);
+    // 물결·잡음 없이 from → to로 매끈하게 — 그래프가 진동하지 않게
+    const igaContinuous = clamp(lerp(from.iga, to.iga, t), 0, 4);
     const iga = Math.round(igaContinuous);
 
     /*
@@ -265,15 +290,20 @@ function generateRecords(startKey, seedBase, { spanDays, captureCount, from, to,
       폴더의 시계열은 촬영 없이 만들어진다. 그래서 넣지 않으면 전신 지도에 점선 원이 하나도
       안 떠서, 기능이 있는지 없는지조차 확인할 수 없다.
 
-      IGA를 따라가게 만든다 — 병변이 심한 회차에 넓기도 한 것이 실제 추이의 모습이고, 그래야
-      슬라이더를 끌 때 색과 크기가 함께 움직이는 것이 자연스럽게 보인다. 값은 "부위의 몇 %"
-      (coveragePct) 기준으로 먼저 잡고(iga 0 → 2%, iga 4 → 20%) 지수로 되돌린다 — 화면이
+      IGA와 상관없이 회차가 지날수록 (중간중간 쉬어 가며) 줄어드는 추이로 둔다(경과 관찰 화면의 넓이 그래프가
+      "점점 작아지는" 예시를 보여 주도록). 값은 "부위의 몇 %"
+      (coveragePct) 기준으로 먼저 잡고(첫 회차 8% → 마지막 7.36%, 중간에 두 번 유지) 지수로 되돌린다 — 화면이
       쓰는 환산(areaTrend의 coveragePctOf)의 역방향이라 그 화면에서 의도한 %가 그대로 나온다.
 
       ⚠️ 지어낸 값이다. 실기기 임계값을 잡을 때 이 숫자를 근거로 쓰면 안 된다.
     */
     const areaIndex = round1(
-      clamp(2 + iga * 4.5 + noise() * 1.5, 0.5, 25) * AREA_OVER_AREA_REF[areaKind],
+      /*
+        **모든 폴더에서 줄어드는** 추이 — 다만 내내 줄기만 하면 너무 이상적이라 중간에 **그대로인
+        구간**을 둔다(줄고 → 유지 → 줄고 → 유지 → 줄고, demoAreaShrink). 첫 촬영 부위의 8%에서
+        시작해 마지막 회차에 첫 촬영 대비 −8%(넓이 그래프 눈금 ±10% 안). 잡음 없음.
+      */
+      clamp(8 * (1 - 0.08 * demoAreaShrink(t)), 0.5, 25) * AREA_OVER_AREA_REF[areaKind],
     );
     return {
       id: `${startKey}-${offset}`,
@@ -441,9 +471,10 @@ const DEMO_FOLDERS = [
     targetId: DEMO_TARGETS[3].id, // 얼굴 아토피피부염
     name: demoName(DEMO_TARGETS[3]),
     disease: DEMO_TARGETS[3].diagnosis?.disease,
-    spanDaysAgoStart: 18,
-    spanDays: 18,
-    captureCount: 6,
+    // 다른 데모 폴더와 같은 날(53일 전)에 시작한다 — 추이 그래프 시작점을 맞춘다
+    spanDaysAgoStart: DEMO_PERSON_SPAN,
+    spanDays: DEMO_PERSON_SPAN,
+    captureCount: 14,
     /*
       나빠지는 사례. 최종 IGA 3 → "나쁨"(주황).
 
@@ -464,9 +495,11 @@ const DEMO_FOLDERS = [
     name: demoName(DEMO_TARGETS[4]),
     disease: DEMO_TARGETS[4].diagnosis?.disease,
     areaKind: 'torso',
-    spanDaysAgoStart: 24,
-    spanDays: 24,
-    captureCount: 8,
+    // 팔 건선·피부 장벽과 같은 날(53일 전)에 시작한다 — 추이 칸의 피부 질환 그래프는 등급이 있는
+    // 이 폴더만으로 그려져서, 늦게 시작하면 그래프 앞쪽이 비어 다른 그래프들과 시작점이 어긋난다.
+    spanDaysAgoStart: DEMO_PERSON_SPAN,
+    spanDays: DEMO_PERSON_SPAN,
+    captureCount: 14,
     /*
       좋아지는 사례로 뒤집었다. 시작 IGA 3.9 → "매우 나쁨"(빨강), 최종 IGA 1.4 → "주의"(노랑).
       f3(다리)와 같은 이유로 0까지 내리지 않는다 — 완전히 나은 것으로 끝내면 세부 증상도
@@ -565,15 +598,15 @@ function makeBarrierFolder({ id, spanDays, stepDays, from, to }) {
     const envelope = Math.sin(t * Math.PI); // 첫·마지막 회차는 from/to 그대로
     const wave = (k) => Math.sin(t * Math.PI * 3.1 + phase + k) * envelope;
     const noise = () => rng() - 0.5;
-    const total = clamp(lerp(from, to, t) + wave(0) * 9 + noise() * 4, 50, 100);
+    // 장벽 총점도 물결·잡음 없이 from → to로 매끈하게 (세부 지표 흔들림은 그대로 둔다)
+    const total = clamp(lerp(from, to, t), 50, 100);
     const scan = makeDumpSkinScan(total, (k) => wave(k) * 6 + noise() * 5);
     return barrierRecord({
       folderId: id,
       date: addDaysKey(startDate, offset),
       dayOffset: offset,
       ts: now - (spanDays - offset) * 86400000,
-      sleepScore: clamp(Math.round(lerp(68, 80, t) + wave(1.7) * 6 + noise() * 4), 0, 100),
-      itchVas: clamp(Math.round(lerp(4, 2, t) + wave(2.9) * 1.5 + noise()), 0, 10),
+      ...demoPersonDay(addDaysKey(startDate, offset)),
       skinScan: scan,
     });
   });

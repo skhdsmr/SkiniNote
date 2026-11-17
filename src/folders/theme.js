@@ -10,7 +10,7 @@ import { topPctText, totalTopPct } from '../skinScan/api';
 
 export const monitoringColors = {
   ...AppColors,
-  warn: '#F0924B', // sev2·sev3 사이를 보간한 4단계용 주황 (AppColors엔 없어 sev 톤에 맞춰 추가)
+  warn: '#F6A66E', // 4단계 "나쁨" 주황 (전신 상태 디자인 시안의 파스텔 톤)
 };
 
 /**
@@ -88,7 +88,7 @@ export const DISPLAY_SCALE = {
  * (SYMPTOM_SEGMENTS_BASE)만 그 반대로 배치해 뒀다 — 이유는 그쪽 주석 참고. 모두 DISPLAY_SCALE로
  * 환산한 뒤의 0~100 표시값 기준이다.
  */
-const LEVEL_COLORS = [monitoringColors.sev0, monitoringColors.sevCaution, monitoringColors.warn, monitoringColors.sev3];
+const LEVEL_COLORS = [monitoringColors.sev0, monitoringColors.sevCaution, monitoringColors.warn, monitoringColors.sevSevere];
 
 /** 피부 질환 — 그래프·요약 박스에 쓰는 0~100 표시값(100 - IGA 기댓값 0~4 × 25) 기준 */
 export const SKIN_SEGMENTS = [

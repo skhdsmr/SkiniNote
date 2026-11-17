@@ -19,13 +19,26 @@ export const AppColors = {
 
   // 4단계 지표(피부 질환·가려움 안정도·수면 점수·세부 증상)의 "좋음/없음"·"주의/미미함" 색.
   // sev1~3과 별개 축이라 새로 둔다 — 저 셋은 이미 다른 화면(진단 확신도 등)에서 다른 의미로 쓴다.
-  sev0: '#5B8DEF',
-  // "주의/미미함" — sev2(중등증 노랑, #F2B33C)보다 더 옅게 잡아서 바로 옆 단계인 주황(warn)과
-  // 뚜렷이 구분되게 한다.
-  sevCaution: '#FFD966',
+  // 4단계 색은 전신 상태 디자인 시안의 파스텔 톤 — 좋음(파랑) · 주의(노랑) · 나쁨(주황, folders/theme의
+  // warn) · 매우 나쁨(sevSevere). sev3은 오류 문구 등 다른 곳에서도 쓰는 빨강이라 4단계용을 따로 둔다.
+  sev0: '#BFD3F6',
+  sevCaution: '#F7D35C',
+  sevSevere: '#EE7B7E',
 
   navInactive: '#B6BAC1',
 } as const;
+
+/**
+ * 배경색 위에 올릴 글자색 — 밝은 배경(파스텔 4단계 색 등)이면 잉크색, 어두우면 흰색.
+ * 4단계 색이 파스텔로 바뀌면서 흰 글자가 안 읽히게 돼서, 배지들이 배경색을 보고 고른다.
+ */
+export function textOnColor(bg: string): string {
+  const m = /^#?([0-9a-f]{6})/i.exec(bg ?? '');
+  if (!m) return '#FFFFFF';
+  const n = parseInt(m[1], 16);
+  const brightness = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return brightness > 0.55 ? AppColors.ink : '#FFFFFF';
+}
 
 /**
  * 흰 카드 공통 그림자/데코레이션.
